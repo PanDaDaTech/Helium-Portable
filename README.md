@@ -1,36 +1,34 @@
 # Helium Browser Portable Edition
 
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Silverwolf-x/helium-plus/main.yml?event=schedule&label=UTC%2000%3A00%20schedule%20build)
-![GitHub Release](https://img.shields.io/github/v/release/Silverwolf-x/helium-plus?include_prereleases&display_name=release&logo=googlechrome&label=Helium)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/Silverwolf-x/helium-plus/main.yml?event=schedule&label=daily%20build)
+![GitHub Release](https://img.shields.io/github/v/release/Silverwolf-x/helium-plus?display_name=release&logo=googlechrome&label=Helium%2B%2B)
 ![GitHub Release](https://img.shields.io/github/v/release/Bush2021/chrome_plus?display_name=release&logo=github&label=Chrome%2B%2B)
 
-Thanks to the contributions of the [Helium Browser](https://github.com/imputnet/helium-windows) and [Chrome++](https://github.com/Bush2021/chrome_plus) projects.
+基于 [Helium Browser](https://github.com/imputnet/helium-windows) 和 [Chrome++](https://github.com/Bush2021/chrome_plus) 的便携版浏览器。
 
-Helium is a privacy-focused Chromium-based browser that respects user freedom while maintaining full compatibility with Chrome extensions and web standards. However, the official Windows builds do not come in a portable format and store data in system folders like `C:\Users\[Name]\AppData\Local`.
+Helium 是注重隐私的 Chromium 分支，完全兼容 Chrome 扩展。官方 Windows 构建不是便携模式，数据存储在 `C:\Users\[Name]\AppData\Local`。本项目通过集成 Chrome++（DLL 注入实现便携化和标签页增强），将 Helium 打包为真正的便携浏览器——所有数据存放在自身目录内。
 
-By integrating [Chrome++](https://github.com/Bush2021/chrome_plus) — a DLL injection project that enables full portability and tab enhancements — this project packages Helium as a truly portable browser that stores all data in its own directory.
+**功能：**
+- 便携配置，Data 和 Cache 目录可自定义
+- 标签页增强（双击关闭、鼠标滚轮切换等）
+- 快捷键重映射、老板键
+- 无需安装，任意文件夹运行
+- 仅保留 zh-CN 和 en-US 语言包，精简体积
+- GitHub Actions 每日自动构建
 
-**Features:**
-- Portable configuration with customizable data and cache directories
-- Tab enhancements (double-click to close, mouse wheel switching, etc.)
-- Hotkey remapping and boss key support
-- No system installation required — runs from any folder
-- Daily automated builds via GitHub Actions
-
-**Update Cycle:**
-* **Release** versions follow the update cycle of Chrome++ (stable enhancements)
-* **Pre-releases** follow the update cycle of Helium Browser (latest Chromium features)
-* The workflow runs daily at 08:00 (UTC+8); actual execution may be delayed depending on GitHub Actions queue
+**更新周期：**
+- 每天 08:00（UTC+8）检查 [Helium Windows](https://github.com/imputnet/helium-windows) 是否有新 release
+- 检测到新版本时自动构建并发布（同时拉取最新 Chrome++）
+- 手动触发时构建为 draft release
+- 版本号格式：`{helium_version}+{chrome_plus_version}`
 
 ---
 
 ## License
 
-This project is released under the GPL-3.0 license. See the [LICENSE](LICENSE) file for details.
+GPL-3.0. See [LICENSE](LICENSE).
 
-Both source projects are licensed under GPL-3.0:
-- [Helium Windows](https://github.com/imputnet/helium-windows) — GPL-3.0
-- [Chrome++](https://github.com/Bush2021/chrome_plus) — GPL-3.0
-
-This integration work preserves and respects those licenses.
+Both source projects are GPL-3.0:
+- [Helium Windows](https://github.com/imputnet/helium-windows)
+- [Chrome++](https://github.com/Bush2021/chrome_plus)
 
