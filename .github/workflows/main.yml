@@ -133,6 +133,7 @@ jobs:
         run: |
           gh release create "${{ steps.build.outputs.release_tag }}" \
             "${{ steps.build.outputs.package_dir }}.zip" \
+            --repo "${{ github.repository }}" \
             --title "${{ steps.build.outputs.release_tag }}" \
             --notes "Portable Helium packaged with Chrome++. Release follows Helium Windows updates.
 
@@ -146,6 +147,7 @@ jobs:
         run: |
           gh release create "${{ steps.build.outputs.release_tag }}" \
             "${{ steps.build.outputs.package_dir }}.zip" \
+            --repo "${{ github.repository }}" \
             --title "${{ steps.build.outputs.release_tag }}" \
             --draft \
             --notes "Manually triggered draft release.
