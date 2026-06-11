@@ -32,18 +32,15 @@ jobs:
           echo "chrome_plus_tag=$latest_plus" >> "$GITHUB_OUTPUT"
           echo "helium_tag=$latest_helium" >> "$GITHUB_OUTPUT"
 
-          cur_helium="" cur_plus=""
+          cur_helium=""
           if [[ "$cur_ver" == *"+"* ]]; then
             cur_helium="${cur_ver%%+*}"; cur_helium="${cur_helium#v}"
-            cur_plus="${cur_ver#*+}"; cur_plus="${cur_plus#v}"
           fi
 
-          if [[ -z "$cur_ver" || -z "$cur_helium" || -z "$cur_plus" ]]; then
-            echo "should_run=release" >> "$GITHUB_OUTPUT"
-          elif [[ "$cur_plus" != "$latest_plus" ]]; then
-            echo "should_run=release" >> "$GITHUB_OUTPUT"
+          if [[ -z "$cur_ver" || -z "$cur_helium" ]]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
           elif [[ "$cur_helium" != "$latest_helium" ]]; then
-            echo "should_run=prerelease" >> "$GITHUB_OUTPUT"
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
           else
             echo "should_run=" >> "$GITHUB_OUTPUT"
           fi
@@ -125,48 +122,33 @@ jobs:
           path: ${{ steps.build.outputs.package_dir }}
 
       - name: Create release archive
-        if: ${{ needs.check.outputs.should_run && github.event_name != 'workflow_dispatch' || github.event_name == 'workflow_dispatch' }}
         shell: bash
         run: zip -r "${{ steps.build.outputs.package_dir }}.zip" "${{ steps.build.outputs.package_dir }}"
 
       - name: Publish release
-        if: ${{ needs.check.outputs.should_run == 'release' && github.event_name != 'workflow_dispatch' }}
-        uses: softprops/action-gh-release@master
-        with:
-          name: ${{ steps.build.outputs.release_tag }}
-          tag_name: ${{ steps.build.outputs.release_tag }}
-          fail_on_unmatched_files: true
-          files: ${{ steps.build.outputs.package_dir }}.zip
-          body: |
-            Portable Helium packaged with Chrome++. Release follows Chrome++ updates.
+        if: ${{ needs.check.outputs.should_run && github.event_name != 'workflow_dispatch' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release create "${{ steps.build.outputs.release_tag }}" \
+            "${{ steps.build.outputs.package_dir }}.zip" \
+            --title "${{ steps.build.outputs.release_tag }}" \
+            --notes "Portable Helium packaged with Chrome++. Release follows Helium Windows updates.
 
-            Sources: [Helium Windows](https://github.com/imputnet/helium-windows) | [Chrome++](https://github.com/Bush2021/chrome_plus)
-
-      - name: Publish prerelease
-        if: ${{ needs.check.outputs.should_run == 'prerelease' && github.event_name != 'workflow_dispatch' }}
-        uses: softprops/action-gh-release@master
-        with:
-          prerelease: true
-          name: ${{ steps.build.outputs.release_tag }}
-          tag_name: ${{ steps.build.outputs.release_tag }}
-          fail_on_unmatched_files: true
-          files: ${{ steps.build.outputs.package_dir }}.zip
-          body: |
-            Portable Helium packaged with Chrome++. Prerelease follows Helium updates.
-
-            Sources: [Helium Windows](https://github.com/imputnet/helium-windows) | [Chrome++](https://github.com/Bush2021/chrome_plus)
+          Sources: [Helium Windows](https://github.com/imputnet/helium-windows) | [Chrome++](https://github.com/Bush2021/chrome_plus)"
 
       - name: Publish draft (manual trigger)
         if: ${{ github.event_name == 'workflow_dispatch' }}
-        uses: softprops/action-gh-release@master
-        with:
-          draft: true
-          name: ${{ steps.build.outputs.release_tag }}
-          tag_name: ${{ steps.build.outputs.release_tag }}
-          fail_on_unmatched_files: true
-          files: ${{ steps.build.outputs.package_dir }}.zip
-          body: |
-            Manually triggered draft release.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release create "${{ steps.build.outputs.release_tag }}" \
+            "${{ steps.build.outputs.package_dir }}.zip" \
+            --title "${{ steps.build.outputs.release_tag }}" \
+            --draft \
+            --notes "Manually triggered draft release.
 
-            Sources: [Helium Windows](https://github.com/imputnet/helium-windows) | [Chrome++](https://github.com/Bush2021/chrome_plus)
+          Sources: [Helium Windows](https://github.com/imputnet/helium-windows) | [Chrome++](https://github.com/Bush2021/chrome_plus)"
 
