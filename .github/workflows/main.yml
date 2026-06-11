@@ -1,69 +1,59 @@
 name: CI
 
 on:
-  # UTC 00:00, Beijing 08:00
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '0 0 * * *' # UTC 00:00, Beijing 08:00
   workflow_dispatch:
-  
 
+permissions:
+  contents: write
 
-permissions: # release需要
-  contents: write   # This is required to create/push the new git tag
 jobs:
   check:
     runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.compare.outputs.should_run }}
+      chrome_plus_tag: ${{ steps.chrome_plus_tag.outputs.release }}
+      helium_tag: ${{ steps.helium_tag.outputs.release }}
     steps:
-      
-      - name: Checkout code
-        uses: actions/checkout@main 
-      
+      - uses: actions/checkout@main
+
       - name: Get current version
         id: current_version
         uses: pozetroninc/github-action-get-latest-release@master
-        with: 
+        with:
           repository: ${{ github.repository }}
-        continue-on-error: true  # 允许在此步骤失败时继续执行后续步骤
+        continue-on-error: true
 
       - name: Get latest chrome_plus version
         id: chrome_plus_tag
         uses: pozetroninc/github-action-get-latest-release@master
-        with: 
+        with:
           repository: Bush2021/chrome_plus
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Get latest helium-windows version
         id: helium_tag
         uses: pozetroninc/github-action-get-latest-release@master
-        with: 
+        with:
           repository: imputnet/helium-windows
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Compare versions
-        id: compare_versions
+        id: compare
         shell: bash
         run: |
           cur_ver="${{ steps.current_version.outputs.release }}"
-          latest_helium_raw="${{ steps.helium_tag.outputs.release }}"
-          latest_plus_raw="${{ steps.chrome_plus_tag.outputs.release }}"
+          latest_helium="${{ steps.helium_tag.outputs.release }}"
+          latest_plus="${{ steps.chrome_plus_tag.outputs.release }}"
+          latest_helium="${latest_helium#v}"
+          latest_plus="${latest_plus#v}"
 
-          latest_helium="${latest_helium_raw#v}"
-          latest_plus="${latest_plus_raw#v}"
-
-          cur_helium=""
-          cur_plus=""
+          cur_helium="" cur_plus=""
           if [[ "$cur_ver" == *"+"* ]]; then
-            cur_helium="${cur_ver%%+*}"
-            cur_plus="${cur_ver#*+}"
-            cur_helium="${cur_helium#v}"
-            cur_plus="${cur_plus#v}"
+            cur_helium="${cur_ver%%+*}"; cur_helium="${cur_helium#v}"
+            cur_plus="${cur_ver#*+}"; cur_plus="${cur_plus#v}"
           fi
-
-          echo "cur_ver=$cur_ver"
-          echo "cur_helium=$cur_helium"
-          echo "cur_plus=$cur_plus"
-          echo "latest_helium=$latest_helium"
-          echo "latest_plus=$latest_plus"
 
           if [[ -z "$cur_ver" || -z "$cur_helium" || -z "$cur_plus" ]]; then
             echo "should_run=release" >> "$GITHUB_OUTPUT"
@@ -75,19 +65,12 @@ jobs:
             echo "should_run=" >> "$GITHUB_OUTPUT"
           fi
 
-    outputs: 
-      should_run: ${{ steps.compare_versions.outputs.should_run }}
-      chrome_plus_tag: ${{ steps.chrome_plus_tag.outputs.release }}
-      helium_tag: ${{ steps.helium_tag.outputs.release }}
-
-
-  release:
+  build:
     runs-on: ubuntu-latest
     needs: check
-    # 跨jobs变量不能用env
     if: ${{ needs.check.outputs.should_run || github.event_name == 'workflow_dispatch' }}
     steps:
-      - name: Download helium-windows release
+      - name: Download releases
         uses: robinraju/release-downloader@main
         with:
           repository: imputnet/helium-windows
@@ -95,175 +78,107 @@ jobs:
           fileName: 'helium_*_x64-windows.zip'
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download chrome_plus release
-        uses: robinraju/release-downloader@main
+      - uses: robinraju/release-downloader@main
         with:
           repository: Bush2021/chrome_plus
           tag: ${{ needs.check.outputs.chrome_plus_tag }}
           fileName: 'Chrome++_*_x86_x64_arm64.7z'
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: List downloaded files
-        shell: bash
-        run: |
-          ls -lh
-
-      - name: Install archive tools
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y p7zip-full zip
-
-      - name: Set package variables
-        id: package
-        shell: bash
-        run: |
-          helium_zip="$(find . -maxdepth 1 -type f -name 'helium_*_x64-windows.zip' -printf '%f\n' | head -n 1)"
-          plus_archive="$(find . -maxdepth 1 -type f -name 'Chrome++_*_x86_x64_arm64.7z' -printf '%f\n' | head -n 1)"
-
-          helium_version="${helium_zip#helium_}"
-          helium_version="${helium_version%_x64-windows.zip}"
-          plus_version="${plus_archive#Chrome++_}"
-          plus_version="${plus_version%_x86_x64_arm64.7z}"
-
-          if [[ -z "$helium_version" || "$helium_version" == "$helium_zip" ]]; then
-            helium_version="${{ needs.check.outputs.helium_tag }}"
-          fi
-          if [[ -z "$plus_version" || "$plus_version" == "$plus_archive" ]]; then
-            plus_version="${{ needs.check.outputs.chrome_plus_tag }}"
-          fi
-
-          helium_version="${helium_version#v}"
-          plus_version="${plus_version#v}"
-          release_tag="${helium_version}+${plus_version}"
-
-          echo "helium_version=$helium_version" >> "$GITHUB_ENV"
-          echo "plus_version=$plus_version" >> "$GITHUB_ENV"
-          echo "release_tag=$release_tag" >> "$GITHUB_ENV"
-          echo "package_dir=helium-windows" >> "$GITHUB_ENV"
-          echo "zip_name=helium_${release_tag}_x64-windows.zip" >> "$GITHUB_ENV"
-          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
-          echo "zip_name=helium_${release_tag}_x64-windows.zip" >> "$GITHUB_OUTPUT"
-
-      - name: Extract releases
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -rf helium_extract chrome_plus_extract
-          mkdir -p helium_extract chrome_plus_extract
-
-          7z x helium_*_x64-windows.zip -ohelium_extract
-          7z x Chrome++_*_x86_x64_arm64.7z -ochrome_plus_extract
+      - name: Install 7z
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full
 
       - name: Build portable package
+        id: build
         shell: bash
         run: |
           set -euo pipefail
 
-          chrome_plus_ini="$(find chrome_plus_extract -type f -path '*/x64/App/chrome++.ini' -print -quit)"
-          if [[ -z "$chrome_plus_ini" ]]; then
-            echo "::error::Could not find Chrome++ x64/App/chrome++.ini"
-            exit 1
-          fi
-          chrome_plus_x64="$(dirname "$(dirname "$chrome_plus_ini")")"
+          # Parse versions from filenames
+          helium_zip="$(find . -maxdepth 1 -name 'helium_*_x64-windows.zip' -printf '%f\n' | head -1)"
+          plus_7z="$(find . -maxdepth 1 -name 'Chrome++_*_x86_x64_arm64.7z' -printf '%f\n' | head -1)"
+          helium_ver="${helium_zip#helium_}"; helium_ver="${helium_ver%_x64-windows.zip}"; helium_ver="${helium_ver#v}"
+          plus_ver="${plus_7z#Chrome++_}"; plus_ver="${plus_ver%_x86_x64_arm64.7z}"; plus_ver="${plus_ver#v}"
+          release_tag="${helium_ver}+${plus_ver}"
+          package_dir="helium_${release_tag}_x64-windows"
 
-          helium_exe="$(find helium_extract -type f -name 'chrome.exe' -print -quit)"
-          if [[ -z "$helium_exe" ]]; then
-            echo "::error::Could not find helium chrome.exe"
-            exit 1
-          fi
-          helium_root="$(dirname "$helium_exe")"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "package_dir=$package_dir" >> "$GITHUB_OUTPUT"
 
-          echo "Chrome++ x64 root: $chrome_plus_x64"
-          echo "Helium root: $helium_root"
+          # Extract
+          7z x "$helium_zip" -ohelium_extract
+          7z x "$plus_7z" -ochrome_plus_extract
 
-          rm -rf "$package_dir" "$zip_name"
-          mkdir -p "$package_dir"
+          # Locate source dirs
+          chrome_plus_x64="$(dirname "$(dirname "$(find chrome_plus_extract -path '*/x64/App/chrome++.ini' -print -quit)")")"
+          helium_root="$(dirname "$(find helium_extract -name 'chrome.exe' -print -quit)")"
 
-          cp -a "$chrome_plus_x64/." "$package_dir/"
+          # Assemble package
           mkdir -p "$package_dir/App"
+          cp -a "$chrome_plus_x64/." "$package_dir/"
           cp -a "$helium_root/." "$package_dir/App/"
           cp -a "$chrome_plus_x64/App/chrome++.ini" "$package_dir/App/"
           cp -a "$chrome_plus_x64/App/version.dll" "$package_dir/App/"
 
-          if [[ -d "$package_dir/App/locales" ]]; then
-            find "$package_dir/App/locales" -type f ! -name 'zh-CN.pak' ! -name 'en-US.pak' -delete
-          fi
+          # Keep only zh-CN and en-US locales
+          find "$package_dir/App/locales" -type f ! -name 'zh-CN.pak' ! -name 'en-US.pak' -delete
 
+          # Version marker
           touch "$package_dir/$release_tag"
 
+          # Verify
           test -f "$package_dir/App/chrome.exe"
           test -f "$package_dir/App/chrome++.ini"
           test -f "$package_dir/App/version.dll"
           test -d "$package_dir/Cache"
           test -d "$package_dir/Data"
-          test -f "$package_dir/$release_tag"
-
-          zip -r "$zip_name" "$package_dir"
-          7z l "$zip_name" | sed -n '1,120p'
+          echo "Package built: $package_dir"
+          ls "$package_dir"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@main
         with:
-          name: ${{ steps.package.outputs.release_tag }}
-          path: ${{ steps.package.outputs.zip_name }}
-          compression-level: 0
+          name: ${{ steps.build.outputs.package_dir }}
+          path: ${{ steps.build.outputs.package_dir }}
 
       - name: Publish release
         if: ${{ needs.check.outputs.should_run == 'release' && github.event_name != 'workflow_dispatch' }}
         uses: softprops/action-gh-release@master
         with:
-          name: ${{ steps.package.outputs.release_tag }}
-          tag_name: ${{ steps.package.outputs.release_tag }}
+          name: ${{ steps.build.outputs.release_tag }}
+          tag_name: ${{ steps.build.outputs.release_tag }}
           fail_on_unmatched_files: true
-          files: ${{ steps.package.outputs.zip_name }}
+          files: ${{ steps.build.outputs.package_dir }}/**
           body: |
-            ${{ steps.package.outputs.release_tag }}
+            Portable Helium packaged with Chrome++. Release follows Chrome++ updates.
 
-            Portable Helium packaged with Chrome++.
-
-            The release follows Chrome++ updates.
-            
-            Sources:
-            - [Helium Windows](https://github.com/imputnet/helium-windows)
-            - [Chrome++](https://github.com/Bush2021/chrome_plus)
+            Sources: [Helium Windows](https://github.com/imputnet/helium-windows) | [Chrome++](https://github.com/Bush2021/chrome_plus)
 
       - name: Publish prerelease
         if: ${{ needs.check.outputs.should_run == 'prerelease' && github.event_name != 'workflow_dispatch' }}
         uses: softprops/action-gh-release@master
         with:
           prerelease: true
-          name: ${{ steps.package.outputs.release_tag }}
-          tag_name: ${{ steps.package.outputs.release_tag }}
+          name: ${{ steps.build.outputs.release_tag }}
+          tag_name: ${{ steps.build.outputs.release_tag }}
           fail_on_unmatched_files: true
-          files: ${{ steps.package.outputs.zip_name }}
+          files: ${{ steps.build.outputs.package_dir }}/**
           body: |
-            ${{ steps.package.outputs.release_tag }}
+            Portable Helium packaged with Chrome++. Prerelease follows Helium updates.
 
-            Portable Helium packaged with Chrome++.
-
-            The prerelease follows Helium Windows updates.
-            
-            Sources:
-            - [Helium Windows](https://github.com/imputnet/helium-windows)
-            - [Chrome++](https://github.com/Bush2021/chrome_plus)
+            Sources: [Helium Windows](https://github.com/imputnet/helium-windows) | [Chrome++](https://github.com/Bush2021/chrome_plus)
 
       - name: Publish draft (manual trigger)
         if: ${{ github.event_name == 'workflow_dispatch' }}
         uses: softprops/action-gh-release@master
         with:
           draft: true
-          name: ${{ steps.package.outputs.release_tag }}
-          tag_name: ${{ steps.package.outputs.release_tag }}
+          name: ${{ steps.build.outputs.release_tag }}
+          tag_name: ${{ steps.build.outputs.release_tag }}
           fail_on_unmatched_files: true
-          files: ${{ steps.package.outputs.zip_name }}
+          files: ${{ steps.build.outputs.package_dir }}/**
           body: |
-            ${{ steps.package.outputs.release_tag }}
-
             Manually triggered draft release.
 
-            Sources:
-            - [Helium Windows](https://github.com/imputnet/helium-windows)
-            - [Chrome++](https://github.com/Bush2021/chrome_plus)
+            Sources: [Helium Windows](https://github.com/imputnet/helium-windows) | [Chrome++](https://github.com/Bush2021/chrome_plus)
 
