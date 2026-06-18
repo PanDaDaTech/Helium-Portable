@@ -37,13 +37,23 @@ jobs:
             cur_helium="${cur_ver%%+*}"; cur_helium="${cur_helium#v}"
           fi
 
+          should_run=""
+          reason="helium is up to date"
           if [[ -z "$cur_ver" || -z "$cur_helium" ]]; then
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            should_run="true"
+            reason="current release is missing or not in helium+chrome_plus format"
           elif [[ "$cur_helium" != "$latest_helium" ]]; then
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "should_run=" >> "$GITHUB_OUTPUT"
+            should_run="true"
+            reason="helium changed: current=$cur_helium latest=$latest_helium"
           fi
+
+          echo "current_release=${cur_ver:-<none>}"
+          echo "current_helium=${cur_helium:-<none>}"
+          echo "latest_helium=$latest_helium"
+          echo "latest_chrome_plus=$latest_plus"
+          echo "should_run=${should_run:-false} ($reason)"
+
+          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
 
   build:
     runs-on: ubuntu-latest
