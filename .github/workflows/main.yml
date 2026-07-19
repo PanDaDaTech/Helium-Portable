@@ -150,11 +150,11 @@ jobs:
             cp -a "$chrome_plus_arch/App/chrome++.ini" "$package_dir/App/"
             cp -a "$chrome_plus_arch/App/version.dll" "$package_dir/App/"
 
-            # Keep only zh-CN and en-US locales (inside version-numbered subfolder)
-            ver_dir="$(find "$package_dir/App" -maxdepth 1 -mindepth 1 -type d -name "${helium_ver}" -print -quit)"
-            if [[ -n "$ver_dir" && -d "$ver_dir/locales" ]]; then
-              find "$ver_dir/locales" -type f ! -name 'zh-CN.pak' ! -name 'en-US.pak' -delete
-            fi
+            # Keep only zh-CN and en-US locales (search recursively for locales dirs)
+            find "$package_dir/App" -type d -name 'locales' | while read -r locales_dir; do
+              echo "Cleaning locales: $locales_dir"
+              find "$locales_dir" -type f ! -name 'zh-CN.pak' ! -name 'en-US.pak' -delete
+            done
 
             # Version marker
             touch "$package_dir/$release_tag"
