@@ -60,12 +60,12 @@ jobs:
     needs: check
     if: ${{ needs.check.outputs.should_run || github.event_name == 'workflow_dispatch' }}
     steps:
-      - name: Download releases
+      - name: Download Helium x64
         uses: robinraju/release-downloader@main
         with:
           repository: imputnet/helium-windows
           tag: ${{ needs.check.outputs.helium_tag }}
-          fileName: 'helium_*_x64-windows.zip'
+          fileName: 'helium_*_x64-installer.exe'
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download Helium arm64
@@ -73,7 +73,7 @@ jobs:
         with:
           repository: imputnet/helium-windows
           tag: ${{ needs.check.outputs.helium_tag }}
-          fileName: 'helium_*_arm64-windows.zip'
+          fileName: 'helium_*_arm64-installer.exe'
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: robinraju/release-downloader@main
@@ -93,10 +93,10 @@ jobs:
           set -euo pipefail
 
           # Parse versions from filenames
-          helium_x64_zip="$(find . -maxdepth 1 -name 'helium_*_x64-windows.zip' -printf '%f\n' | head -1)"
-          helium_arm64_zip="$(find . -maxdepth 1 -name 'helium_*_arm64-windows.zip' -printf '%f\n' | head -1)"
+          helium_x64_exe="$(find . -maxdepth 1 -name 'helium_*_x64-installer.exe' -printf '%f\n' | head -1)"
+          helium_arm64_exe="$(find . -maxdepth 1 -name 'helium_*_arm64-installer.exe' -printf '%f\n' | head -1)"
           plus_7z="$(find . -maxdepth 1 -name 'Chrome++_*_x86_x64_arm64.7z' -printf '%f\n' | head -1)"
-          helium_ver="${helium_x64_zip#helium_}"; helium_ver="${helium_ver%_x64-windows.zip}"; helium_ver="${helium_ver#v}"
+          helium_ver="${helium_x64_exe#helium_}"; helium_ver="${helium_ver%_x64-installer.exe}"; helium_ver="${helium_ver#v}"
           plus_ver="${plus_7z#Chrome++_}"; plus_ver="${plus_ver%_x86_x64_arm64.7z}"; plus_ver="${plus_ver#v}"
           release_tag="${helium_ver}+${plus_ver}"
 
@@ -104,9 +104,9 @@ jobs:
           echo "x64_package_dir=helium_${release_tag}_x64-windows" >> "$GITHUB_OUTPUT"
           echo "arm64_package_dir=helium_${release_tag}_arm64-windows" >> "$GITHUB_OUTPUT"
 
-          # Extract
-          7z x "$helium_x64_zip" -ohelium_x64_extract
-          7z x "$helium_arm64_zip" -ohelium_arm64_extract
+          # Extract exe installers with 7z
+          7z x "$helium_x64_exe" -ohelium_x64_extract
+          7z x "$helium_arm64_exe" -ohelium_arm64_extract
           7z x "$plus_7z" -ochrome_plus_extract
 
           for arch in x64 arm64; do
@@ -115,7 +115,7 @@ jobs:
 
             # Locate source dirs for current arch
             chrome_plus_arch="$(dirname "$(dirname "$(find chrome_plus_extract -path "*/${arch}/App/chrome++.ini" -print -quit)")")"
-            helium_root="$(dirname "$(find "helium_${arch}_extract" -name 'chrome.exe' -print -quit)")"
+            helium_root="$(find "helium_${arch}_extract" -maxdepth 1 -name 'chrome.exe' -printf '%h\n' -quit)"
 
             # Assemble package
             mkdir -p "$package_dir/App"
@@ -124,8 +124,11 @@ jobs:
             cp -a "$chrome_plus_arch/App/chrome++.ini" "$package_dir/App/"
             cp -a "$chrome_plus_arch/App/version.dll" "$package_dir/App/"
 
-            # Keep only zh-CN and en-US locales
-            find "$package_dir/App/locales" -type f ! -name 'zh-CN.pak' ! -name 'en-US.pak' -delete
+            # Keep only zh-CN and en-US locales (inside version-numbered subfolder)
+            ver_dir="$(find "$package_dir/App" -maxdepth 1 -mindepth 1 -type d -name "${helium_ver}" -print -quit)"
+            if [[ -n "$ver_dir" && -d "$ver_dir/locales" ]]; then
+              find "$ver_dir/locales" -type f ! -name 'zh-CN.pak' ! -name 'en-US.pak' -delete
+            fi
 
             # Version marker
             touch "$package_dir/$release_tag"
