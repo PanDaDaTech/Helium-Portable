@@ -114,7 +114,8 @@ jobs:
             inner_archive="$(find "helium_${arch}_extract" -name '*.7z' -o -name '*.7z.001' | sort | head -1)"
             if [[ -n "$inner_archive" ]]; then
               echo "Extracting inner archive: $inner_archive"
-              7z x "$inner_archive" "-ohelium_${arch}_extract" -aoa
+              mkdir -p "helium_${arch}_files"
+              7z x "$inner_archive" "-ohelium_${arch}_files" -aoa
             fi
           done
 
@@ -124,12 +125,12 @@ jobs:
 
             # Locate source dirs for current arch
             chrome_plus_arch="$(dirname "$(dirname "$(find chrome_plus_extract -path "*/${arch}/App/chrome++.ini" -print -quit)")")"
-            helium_root="$(dirname "$(find "helium_${arch}_extract" -name 'chrome.exe' -print -quit)")"
+            helium_root="$(dirname "$(find "helium_${arch}_files" -name 'chrome.exe' -print -quit 2>/dev/null)")"
 
             if [[ -z "$helium_root" || "$helium_root" == "." ]]; then
-              echo "ERROR: chrome.exe not found in helium_${arch}_extract"
-              echo "Contents of helium_${arch}_extract:"
-              find "helium_${arch}_extract" -maxdepth 2 -type f | head -30
+              echo "ERROR: chrome.exe not found in helium_${arch}_files"
+              echo "--- Directory tree (depth 3) ---"
+              find "helium_${arch}_files" -maxdepth 3 | head -50
               exit 1
             fi
 
