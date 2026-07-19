@@ -104,10 +104,19 @@ jobs:
           echo "x64_package_dir=helium_${release_tag}_x64-windows" >> "$GITHUB_OUTPUT"
           echo "arm64_package_dir=helium_${release_tag}_arm64-windows" >> "$GITHUB_OUTPUT"
 
-          # Extract exe installers with 7z
+          # Extract exe installers with 7z (NSIS outer layer)
           7z x "$helium_x64_exe" -ohelium_x64_extract
           7z x "$helium_arm64_exe" -ohelium_arm64_extract
           7z x "$plus_7z" -ochrome_plus_extract
+
+          # NSIS installers contain embedded archives — extract them to get actual browser files
+          for arch in x64 arm64; do
+            inner_archive="$(find "helium_${arch}_extract" -name '*.7z' -o -name '*.7z.001' | sort | head -1)"
+            if [[ -n "$inner_archive" ]]; then
+              echo "Extracting inner archive: $inner_archive"
+              7z x "$inner_archive" "-ohelium_${arch}_extract" -aoa
+            fi
+          done
 
           for arch in x64 arm64; do
             echo "=== Building $arch package ==="
@@ -115,7 +124,14 @@ jobs:
 
             # Locate source dirs for current arch
             chrome_plus_arch="$(dirname "$(dirname "$(find chrome_plus_extract -path "*/${arch}/App/chrome++.ini" -print -quit)")")"
-            helium_root="$(find "helium_${arch}_extract" -maxdepth 1 -name 'chrome.exe' -printf '%h\n' -quit)"
+            helium_root="$(dirname "$(find "helium_${arch}_extract" -name 'chrome.exe' -print -quit)")"
+
+            if [[ -z "$helium_root" || "$helium_root" == "." ]]; then
+              echo "ERROR: chrome.exe not found in helium_${arch}_extract"
+              echo "Contents of helium_${arch}_extract:"
+              find "helium_${arch}_extract" -maxdepth 2 -type f | head -30
+              exit 1
+            fi
 
             # Assemble package
             mkdir -p "$package_dir/App"
