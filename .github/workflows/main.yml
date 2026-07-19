@@ -109,14 +109,23 @@ jobs:
           7z x "$helium_arm64_exe" -ohelium_arm64_extract
           7z x "$plus_7z" -ochrome_plus_extract
 
-          # NSIS installers contain embedded archives — extract them to get actual browser files
+          # NSIS installers contain nested archives — extract iteratively until browser files appear
           for arch in x64 arm64; do
+            mkdir -p "helium_${arch}_files"
+            # First pass: extract inner archive from NSIS output
             inner_archive="$(find "helium_${arch}_extract" -name '*.7z' -o -name '*.7z.001' | sort | head -1)"
             if [[ -n "$inner_archive" ]]; then
-              echo "Extracting inner archive: $inner_archive"
-              mkdir -p "helium_${arch}_files"
+              echo "Extracting: $inner_archive"
               7z x "$inner_archive" "-ohelium_${arch}_files" -aoa
             fi
+            # Keep extracting if the result is still an archive (nested 7z)
+            while true; do
+              nested="$(find "helium_${arch}_files" -maxdepth 1 \( -name '*.7z' -o -name '*.7z.001' \) | sort | head -1)"
+              [[ -z "$nested" ]] && break
+              echo "Extracting nested archive: $nested"
+              7z x "$nested" "-ohelium_${arch}_files" -aoa
+              rm -f "$nested"
+            done
           done
 
           for arch in x64 arm64; do
