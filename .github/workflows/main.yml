@@ -68,6 +68,14 @@ jobs:
           fileName: 'helium_*_x64-windows.zip'
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Download Helium arm64
+        uses: robinraju/release-downloader@main
+        with:
+          repository: imputnet/helium-windows
+          tag: ${{ needs.check.outputs.helium_tag }}
+          fileName: 'helium_*_arm64-windows.zip'
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: robinraju/release-downloader@main
         with:
           repository: Bush2021/chrome_plus
@@ -78,62 +86,77 @@ jobs:
       - name: Install 7z
         run: sudo apt-get update && sudo apt-get install -y p7zip-full
 
-      - name: Build portable package
+      - name: Build portable packages
         id: build
         shell: bash
         run: |
           set -euo pipefail
 
           # Parse versions from filenames
-          helium_zip="$(find . -maxdepth 1 -name 'helium_*_x64-windows.zip' -printf '%f\n' | head -1)"
+          helium_x64_zip="$(find . -maxdepth 1 -name 'helium_*_x64-windows.zip' -printf '%f\n' | head -1)"
+          helium_arm64_zip="$(find . -maxdepth 1 -name 'helium_*_arm64-windows.zip' -printf '%f\n' | head -1)"
           plus_7z="$(find . -maxdepth 1 -name 'Chrome++_*_x86_x64_arm64.7z' -printf '%f\n' | head -1)"
-          helium_ver="${helium_zip#helium_}"; helium_ver="${helium_ver%_x64-windows.zip}"; helium_ver="${helium_ver#v}"
+          helium_ver="${helium_x64_zip#helium_}"; helium_ver="${helium_ver%_x64-windows.zip}"; helium_ver="${helium_ver#v}"
           plus_ver="${plus_7z#Chrome++_}"; plus_ver="${plus_ver%_x86_x64_arm64.7z}"; plus_ver="${plus_ver#v}"
           release_tag="${helium_ver}+${plus_ver}"
-          package_dir="helium_${release_tag}_x64-windows"
 
           echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
-          echo "package_dir=$package_dir" >> "$GITHUB_OUTPUT"
+          echo "x64_package_dir=helium_${release_tag}_x64-windows" >> "$GITHUB_OUTPUT"
+          echo "arm64_package_dir=helium_${release_tag}_arm64-windows" >> "$GITHUB_OUTPUT"
 
           # Extract
-          7z x "$helium_zip" -ohelium_extract
+          7z x "$helium_x64_zip" -ohelium_x64_extract
+          7z x "$helium_arm64_zip" -ohelium_arm64_extract
           7z x "$plus_7z" -ochrome_plus_extract
 
-          # Locate source dirs
-          chrome_plus_x64="$(dirname "$(dirname "$(find chrome_plus_extract -path '*/x64/App/chrome++.ini' -print -quit)")")"
-          helium_root="$(dirname "$(find helium_extract -name 'chrome.exe' -print -quit)")"
+          for arch in x64 arm64; do
+            echo "=== Building $arch package ==="
+            package_dir="helium_${release_tag}_${arch}-windows"
 
-          # Assemble package
-          mkdir -p "$package_dir/App"
-          cp -a "$chrome_plus_x64/." "$package_dir/"
-          cp -a "$helium_root/." "$package_dir/App/"
-          cp -a "$chrome_plus_x64/App/chrome++.ini" "$package_dir/App/"
-          cp -a "$chrome_plus_x64/App/version.dll" "$package_dir/App/"
+            # Locate source dirs for current arch
+            chrome_plus_arch="$(dirname "$(dirname "$(find chrome_plus_extract -path "*/${arch}/App/chrome++.ini" -print -quit)")")"
+            helium_root="$(dirname "$(find "helium_${arch}_extract" -name 'chrome.exe' -print -quit)")"
 
-          # Keep only zh-CN and en-US locales
-          find "$package_dir/App/locales" -type f ! -name 'zh-CN.pak' ! -name 'en-US.pak' -delete
+            # Assemble package
+            mkdir -p "$package_dir/App"
+            cp -a "$chrome_plus_arch/." "$package_dir/"
+            cp -a "$helium_root/." "$package_dir/App/"
+            cp -a "$chrome_plus_arch/App/chrome++.ini" "$package_dir/App/"
+            cp -a "$chrome_plus_arch/App/version.dll" "$package_dir/App/"
 
-          # Version marker
-          touch "$package_dir/$release_tag"
+            # Keep only zh-CN and en-US locales
+            find "$package_dir/App/locales" -type f ! -name 'zh-CN.pak' ! -name 'en-US.pak' -delete
 
-          # Verify
-          test -f "$package_dir/App/chrome.exe"
-          test -f "$package_dir/App/chrome++.ini"
-          test -f "$package_dir/App/version.dll"
-          test -d "$package_dir/Cache"
-          test -d "$package_dir/Data"
-          echo "Package built: $package_dir"
-          ls "$package_dir"
+            # Version marker
+            touch "$package_dir/$release_tag"
 
-      - name: Upload Artifact
+            # Verify
+            test -f "$package_dir/App/chrome.exe"
+            test -f "$package_dir/App/chrome++.ini"
+            test -f "$package_dir/App/version.dll"
+            test -d "$package_dir/Cache"
+            test -d "$package_dir/Data"
+            echo "Package built: $package_dir"
+            ls "$package_dir"
+          done
+
+      - name: Upload x64 Artifact
         uses: actions/upload-artifact@main
         with:
-          name: ${{ steps.build.outputs.package_dir }}
-          path: ${{ steps.build.outputs.package_dir }}
+          name: ${{ steps.build.outputs.x64_package_dir }}
+          path: ${{ steps.build.outputs.x64_package_dir }}
 
-      - name: Create release archive
+      - name: Upload arm64 Artifact
+        uses: actions/upload-artifact@main
+        with:
+          name: ${{ steps.build.outputs.arm64_package_dir }}
+          path: ${{ steps.build.outputs.arm64_package_dir }}
+
+      - name: Create release archives
         shell: bash
-        run: zip -r "${{ steps.build.outputs.package_dir }}.zip" "${{ steps.build.outputs.package_dir }}"
+        run: |
+          7z a "${{ steps.build.outputs.x64_package_dir }}.7z" "${{ steps.build.outputs.x64_package_dir }}"
+          7z a "${{ steps.build.outputs.arm64_package_dir }}.7z" "${{ steps.build.outputs.arm64_package_dir }}"
 
       - name: Publish release
         if: ${{ needs.check.outputs.should_run && github.event_name != 'workflow_dispatch' }}
@@ -142,10 +165,12 @@ jobs:
         shell: bash
         run: |
           gh release create "${{ steps.build.outputs.release_tag }}" \
-            "${{ steps.build.outputs.package_dir }}.zip" \
+            "${{ steps.build.outputs.x64_package_dir }}.7z" \
+            "${{ steps.build.outputs.arm64_package_dir }}.7z" \
             --repo "${{ github.repository }}" \
             --title "${{ steps.build.outputs.release_tag }}" \
-            --notes "Portable Helium packaged with Chrome++. Release follows Helium Windows updates.
+            --notes "Portable Helium packaged with Chrome++. Available for x64 and arm64.
+          Release follows Helium Windows updates.
 
           Sources: [Helium Windows](https://github.com/imputnet/helium-windows) | [Chrome++](https://github.com/Bush2021/chrome_plus)"
 
@@ -156,11 +181,12 @@ jobs:
         shell: bash
         run: |
           gh release create "${{ steps.build.outputs.release_tag }}" \
-            "${{ steps.build.outputs.package_dir }}.zip" \
+            "${{ steps.build.outputs.x64_package_dir }}.7z" \
+            "${{ steps.build.outputs.arm64_package_dir }}.7z" \
             --repo "${{ github.repository }}" \
             --title "${{ steps.build.outputs.release_tag }}" \
             --draft \
-            --notes "Manually triggered draft release.
+            --notes "Manually triggered draft release. Available for x64 and arm64.
 
           Sources: [Helium Windows](https://github.com/imputnet/helium-windows) | [Chrome++](https://github.com/Bush2021/chrome_plus)"
 
