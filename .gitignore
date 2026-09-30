@@ -1,2 +1,5 @@
 build/
 temp/
+
+# 智能体工作目录（内含 scratch 下载缓存，切勿提交）
+.workbuddy/

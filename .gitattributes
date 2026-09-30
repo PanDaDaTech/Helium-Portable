@@ -1,0 +1,15 @@
+# Chrome++ 是 vendored 的原始二进制载荷，必须以字节完全一致的方式进出仓库。
+#
+# 为什么必须显式声明：
+#   - chrome++.ini 是 UTF-16LE（带 BOM，含 NUL 字节，行尾为 0D 00 0A 00），
+#     一旦被当成文本做换行符转换，0A 会被改写，文件直接损坏；
+#   - version.dll 是 PE 二进制，更不能做任何转换。
+# 本机 core.autocrlf=true，不加这条就只能依赖 git 的二进制探测「碰运气」。
+# -text = 不做任何换行符转换。
+#
+# 注意：后面的规则会覆盖前面的，所以 README 要单独交回给 git 当普通文本处理。
+vendor/chrome_plus/** -text
+vendor/chrome_plus/README.md text
+
+# 让本文件自身始终以 LF 存放，避免 autocrlf 造成的无谓告警
+.gitattributes text eol=lf

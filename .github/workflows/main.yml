@@ -13,44 +13,69 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       should_run: ${{ steps.compare.outputs.should_run }}
-      chrome_plus_tag: ${{ steps.compare.outputs.chrome_plus_tag }}
+      chrome_plus_ver: ${{ steps.compare.outputs.chrome_plus_ver }}
       helium_tag: ${{ steps.compare.outputs.helium_tag }}
     steps:
+      - uses: actions/checkout@v7
+
       - name: Compare versions
         id: compare
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
+          # Chrome++ 版本取自仓库内 vendored 的文件。
+          # 上游 Bush2021/chrome_plus 账号已被冻结，仓库不可访问，不能再从上游查询版本。
+          if [[ ! -f vendor/chrome_plus/VERSION ]]; then
+            echo "::error::vendor/chrome_plus/VERSION not found"
+            exit 1
+          fi
+          plus_ver="$(tr -d '[:space:]' < vendor/chrome_plus/VERSION)"
+          if [[ -z "$plus_ver" ]]; then
+            echo "::error::vendor/chrome_plus/VERSION is empty"
+            exit 1
+          fi
+
+          # 本仓库当前 release；首次构建时不存在，属正常情况
           cur_ver="$(gh release view --repo "${{ github.repository }}" --json tagName -q '.tagName' 2>/dev/null || echo "")"
-          latest_helium="$(gh release view --repo imputnet/helium-windows --json tagName -q '.tagName')"
-          latest_plus="$(gh release view --repo Bush2021/chrome_plus --json tagName -q '.tagName')"
 
+          # 上游 Helium Windows 最新 release。这里失败必须显式报错，
+          # 否则空值会被当成「版本相同」而静默跳过构建。
+          latest_helium="$(gh release view --repo imputnet/helium-windows --json tagName -q '.tagName' 2>/dev/null || echo "")"
+          if [[ -z "$latest_helium" ]]; then
+            echo "::error::无法读取 imputnet/helium-windows 的最新 release（上游改名/网络/token 问题）"
+            exit 1
+          fi
           latest_helium="${latest_helium#v}"
-          latest_plus="${latest_plus#v}"
 
-          echo "chrome_plus_tag=$latest_plus" >> "$GITHUB_OUTPUT"
+          echo "chrome_plus_ver=$plus_ver" >> "$GITHUB_OUTPUT"
           echo "helium_tag=$latest_helium" >> "$GITHUB_OUTPUT"
 
+          # 从现有 release tag 解析出 {helium}+{chrome_plus}
           cur_helium=""
+          cur_plus=""
           if [[ "$cur_ver" == *"+"* ]]; then
             cur_helium="${cur_ver%%+*}"; cur_helium="${cur_helium#v}"
+            cur_plus="${cur_ver#*+}"
           fi
 
           should_run=""
-          reason="helium is up to date"
+          reason="helium and chrome_plus are up to date"
           if [[ -z "$cur_ver" || -z "$cur_helium" ]]; then
             should_run="true"
             reason="current release is missing or not in helium+chrome_plus format"
           elif [[ "$cur_helium" != "$latest_helium" ]]; then
             should_run="true"
             reason="helium changed: current=$cur_helium latest=$latest_helium"
+          elif [[ "$cur_plus" != "$plus_ver" ]]; then
+            should_run="true"
+            reason="chrome_plus changed: current=$cur_plus vendored=$plus_ver"
           fi
 
           echo "current_release=${cur_ver:-<none>}"
           echo "current_helium=${cur_helium:-<none>}"
           echo "latest_helium=$latest_helium"
-          echo "latest_chrome_plus=$latest_plus"
+          echo "chrome_plus_ver=$plus_ver"
           echo "should_run=${should_run:-false} ($reason)"
 
           echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
@@ -60,8 +85,11 @@ jobs:
     needs: check
     if: ${{ needs.check.outputs.should_run || github.event_name == 'workflow_dispatch' }}
     steps:
+      # Chrome++ 文件现在由仓库自带（vendor/），构建 job 必须 checkout 才能拿到
+      - uses: actions/checkout@v7
+
       - name: Download Helium x64
-        uses: robinraju/release-downloader@main
+        uses: robinraju/release-downloader@v1
         with:
           repository: imputnet/helium-windows
           tag: ${{ needs.check.outputs.helium_tag }}
@@ -69,18 +97,11 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download Helium arm64
-        uses: robinraju/release-downloader@main
+        uses: robinraju/release-downloader@v1
         with:
           repository: imputnet/helium-windows
           tag: ${{ needs.check.outputs.helium_tag }}
           fileName: 'helium_*_arm64-installer.exe'
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: robinraju/release-downloader@main
-        with:
-          repository: Bush2021/chrome_plus
-          tag: ${{ needs.check.outputs.chrome_plus_tag }}
-          fileName: 'Chrome++_*_x86_x64_arm64.7z'
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install 7z
@@ -92,12 +113,17 @@ jobs:
         run: |
           set -euo pipefail
 
+          plus_ver="${{ needs.check.outputs.chrome_plus_ver }}"
+
           # Parse versions from filenames
           helium_x64_exe="$(find . -maxdepth 1 -name 'helium_*_x64-installer.exe' -printf '%f\n' | head -1)"
           helium_arm64_exe="$(find . -maxdepth 1 -name 'helium_*_arm64-installer.exe' -printf '%f\n' | head -1)"
-          plus_7z="$(find . -maxdepth 1 -name 'Chrome++_*_x86_x64_arm64.7z' -printf '%f\n' | head -1)"
+          if [[ -z "$helium_x64_exe" || -z "$helium_arm64_exe" ]]; then
+            echo "::error::helium installer not found in workspace"
+            ls -la
+            exit 1
+          fi
           helium_ver="${helium_x64_exe#helium_}"; helium_ver="${helium_ver%_x64-installer.exe}"; helium_ver="${helium_ver#v}"
-          plus_ver="${plus_7z#Chrome++_}"; plus_ver="${plus_ver%_x86_x64_arm64.7z}"; plus_ver="${plus_ver#v}"
           release_tag="${helium_ver}+${plus_ver}"
 
           echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
@@ -107,7 +133,6 @@ jobs:
           # Extract exe installers with 7z (NSIS outer layer)
           7z x "$helium_x64_exe" -ohelium_x64_extract
           7z x "$helium_arm64_exe" -ohelium_arm64_extract
-          7z x "$plus_7z" -ochrome_plus_extract
 
           # NSIS installers contain nested archives — extract iteratively until browser files appear
           for arch in x64 arm64; do
@@ -131,11 +156,19 @@ jobs:
           for arch in x64 arm64; do
             echo "=== Building $arch package ==="
             package_dir="helium_${release_tag}_${arch}-windows"
+            chrome_plus_arch="vendor/chrome_plus/${arch}"
 
-            # Locate source dirs for current arch
-            chrome_plus_arch="$(dirname "$(dirname "$(find chrome_plus_extract -path "*/${arch}/App/chrome++.ini" -print -quit)")")"
+            # 校验仓库自带的 Chrome++ 载荷
+            for f in App/chrome++.ini App/version.dll; do
+              if [[ ! -f "$chrome_plus_arch/$f" ]]; then
+                echo "::error::missing vendored Chrome++ file: $chrome_plus_arch/$f"
+                find vendor/chrome_plus -maxdepth 3 | sort
+                exit 1
+              fi
+            done
+
+            # Locate helium source dir for current arch
             helium_root="$(dirname "$(find "helium_${arch}_files" -name 'chrome.exe' -print -quit 2>/dev/null)")"
-
             if [[ -z "$helium_root" || "$helium_root" == "." ]]; then
               echo "ERROR: chrome.exe not found in helium_${arch}_files"
               echo "--- Directory tree (depth 3) ---"
@@ -143,12 +176,17 @@ jobs:
               exit 1
             fi
 
-            # Assemble package
-            mkdir -p "$package_dir/App"
+            # Assemble package: Chrome++ 目录内容落在根目录，Helium 落在 App/
+            mkdir -p "$package_dir"
             cp -a "$chrome_plus_arch/." "$package_dir/"
+            mkdir -p "$package_dir/App"
             cp -a "$helium_root/." "$package_dir/App/"
+            # 若 Chromium 自带同名文件会覆盖掉 Chrome++ 的，这里补回来
             cp -a "$chrome_plus_arch/App/chrome++.ini" "$package_dir/App/"
             cp -a "$chrome_plus_arch/App/version.dll" "$package_dir/App/"
+
+            # 便携化运行期需要的空目录（不依赖 git 能存空目录）
+            mkdir -p "$package_dir/Cache" "$package_dir/Data"
 
             # Keep only zh-CN and en-US locales (search recursively for locales dirs)
             find "$package_dir/App" -type d -iname 'locales' | while read -r locales_dir; do
@@ -170,13 +208,13 @@ jobs:
           done
 
       - name: Upload x64 Artifact
-        uses: actions/upload-artifact@main
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.build.outputs.x64_package_dir }}
           path: ${{ steps.build.outputs.x64_package_dir }}
 
       - name: Upload arm64 Artifact
-        uses: actions/upload-artifact@main
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.build.outputs.arm64_package_dir }}
           path: ${{ steps.build.outputs.arm64_package_dir }}
@@ -201,7 +239,7 @@ jobs:
             --notes "Portable Helium packaged with Chrome++. Available for x64 and arm64.
           Release follows Helium Windows updates.
 
-          Sources: [Helium Windows](https://github.com/imputnet/helium-windows) | [Chrome++](https://github.com/Bush2021/chrome_plus)"
+          Sources: [Helium Windows](https://github.com/imputnet/helium-windows) | Chrome++ (upstream Bush2021/chrome_plus is currently unavailable; the Chrome++ binaries are vendored in this repo)"
 
       - name: Publish draft (manual trigger)
         if: ${{ github.event_name == 'workflow_dispatch' }}
@@ -217,5 +255,4 @@ jobs:
             --draft \
             --notes "Manually triggered draft release. Available for x64 and arm64.
 
-          Sources: [Helium Windows](https://github.com/imputnet/helium-windows) | [Chrome++](https://github.com/Bush2021/chrome_plus)"
-
+          Sources: [Helium Windows](https://github.com/imputnet/helium-windows) | Chrome++ (upstream Bush2021/chrome_plus is currently unavailable; the Chrome++ binaries are vendored in this repo)"
