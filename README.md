@@ -7,9 +7,11 @@
 基于 [Helium Browser](https://github.com/imputnet/helium-windows) 和 [Chrome++](https://github.com/Bush2021/chrome_plus) 构建的便携浏览器。
 
 **致谢原项目 [silverwolf-x/helium-plus](https://github.com/silverwolf-x/helium-plus) 的仓库参考！**
- - 因上游提供的便捷版文件夹顺序原因对我而言不太爽，故 Fork 原项目并在此基础上改用上游的 NSIS 安装包版本提取制作便捷版。
+ - Fork 原项目并在此基础上改用上游的 NSIS 安装包版本提取制作便捷版。
+ - 由于 @Bush2021 的账号出现问题，无法正常获取仓库状态，现已提取 Chrome++ 相关文件，方便后续进行 CI。
 
-Helium 是一个注重隐私的 Chromium 分支，完全兼容 Chrome 扩展。官方 Windows 版本并非便携设计——用户数据存储在 `C:\Users\[用户名]\AppData\Local` 下。本项目集成 Chrome++（DLL 注入实现便携化及标签页增强），将 Helium 打包为真正的便携浏览器，所有数据保留在程序目录内。
+Helium 是一个注重隐私的 Chromium 分支，完全兼容 Chrome 扩展。官方 Windows 版本并非便携设计——用户数据存储在 `C:\Users\[用户名]\AppData\Local` 下。
+本项目集成 Chrome++（DLL 注入实现便携化及标签页增强），将 Helium 打包为真正的便携浏览器，所有数据保留在程序目录内。
 
 **特性：**
 - 便携配置——`Data` 和 `Cache` 目录保留在程序文件夹内
