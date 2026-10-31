@@ -228,26 +228,23 @@ jobs:
           repo="${{ github.repository }}"
           assets=("${{ steps.build.outputs.x64_package_dir }}.7z" "${{ steps.build.outputs.arm64_package_dir }}.7z")
 
-          # 用 API 判断该 tag 是否已有 release：**只有 404 才算不存在**。
-          # 用 `gh release view` 时，API 抖动也返回非零，会被误判成「不存在」而
-          # 建出同 tag 的重复 release。
-          code=$(curl -sS -o rel.json -w "%{http_code}" \
+          # 判断该 tag 是否已有 release。**必须扫全量列表**：
+          # GET /releases/tags/{tag} 不会返回草稿（草稿发布前没有 tag 对象），
+          # 对已存在的草稿会误报 404，结果每跑一次就多一个重复草稿。
+          state=$(curl -sS --fail-with-body \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$repo/releases/tags/$tag")
-          case "$code" in
-            200)
-              state=$(python3 -c "import json;print('draft' if json.load(open('rel.json'))['draft'] else 'published')")
-              ;;
-            404)
-              state="absent"
-              ;;
-            *)
-              echo "::error::查询 release $tag 失败（HTTP $code）"
-              cat rel.json || true
-              exit 1
-              ;;
-          esac
+            "https://api.github.com/repos/$repo/releases?per_page=100" \
+            | python3 -c "
+          import json, sys
+          tag = sys.argv[1]
+          for r in json.load(sys.stdin):
+              if r['tag_name'] == tag:
+                  print('draft' if r['draft'] else 'published')
+                  break
+          else:
+              print('absent')
+          " "$tag")
 
           case "$state" in
             draft)
@@ -282,16 +279,26 @@ jobs:
           repo="${{ github.repository }}"
           assets=("${{ steps.build.outputs.x64_package_dir }}.7z" "${{ steps.build.outputs.arm64_package_dir }}.7z")
 
-          # 手动触发只做草稿，绝不自动转正；已存在则覆盖附件
-          code=$(curl -sS -o /dev/null -w "%{http_code}" \
+          # 手动触发只做草稿，绝不自动转正；已存在（含草稿）则覆盖附件
+          state=$(curl -sS --fail-with-body \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$repo/releases/tags/$tag")
+            "https://api.github.com/repos/$repo/releases?per_page=100" \
+            | python3 -c "
+          import json, sys
+          tag = sys.argv[1]
+          for r in json.load(sys.stdin):
+              if r['tag_name'] == tag:
+                  print('exists')
+                  break
+          else:
+              print('absent')
+          " "$tag")
 
-          if [[ "$code" == "200" ]]; then
+          if [[ "$state" == "exists" ]]; then
             echo "Release $tag 已存在，覆盖上传附件（保持草稿状态）"
             gh release upload "$tag" "${assets[@]}" --clobber --repo "$repo"
-          elif [[ "$code" == "404" ]]; then
+          else
             gh release create "$tag" "${assets[@]}" \
               --repo "$repo" \
               --title "$tag" \
@@ -299,7 +306,4 @@ jobs:
               --notes "Manually triggered draft release. Available for x64 and arm64.
 
           Sources: [Helium Windows](https://github.com/imputnet/helium-windows) | Chrome++ (upstream Bush2021/chrome_plus is currently unavailable; the Chrome++ binaries are vendored in this repo)"
-          else
-            echo "::error::查询 release $tag 失败（HTTP $code）"
-            exit 1
           fi
