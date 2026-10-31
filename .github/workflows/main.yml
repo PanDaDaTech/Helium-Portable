@@ -207,17 +207,9 @@ jobs:
             ls "$package_dir"
           done
 
-      - name: Upload x64 Artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ steps.build.outputs.x64_package_dir }}
-          path: ${{ steps.build.outputs.x64_package_dir }}
-
-      - name: Upload arm64 Artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ steps.build.outputs.arm64_package_dir }}
-          path: ${{ steps.build.outputs.arm64_package_dir }}
+      # 不保留 CI artifact：产物已经在 Release 附件里（7z），再存一份纯属重复，
+      # 而 artifact 会吃 GitHub Actions 存储配额（本账户曾因此把上传全堵死）。
+      # 构建失败要排查时看 Actions 日志即可。
 
       - name: Create release archives
         shell: bash
@@ -226,20 +218,30 @@ jobs:
           7z a "${{ steps.build.outputs.arm64_package_dir }}.7z" "${{ steps.build.outputs.arm64_package_dir }}"
 
       - name: Publish release
-        if: ${{ needs.check.outputs.should_run && github.event_name != 'workflow_dispatch' }}
+        if: ${{ github.event_name != 'workflow_dispatch' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          gh release create "${{ steps.build.outputs.release_tag }}" \
-            "${{ steps.build.outputs.x64_package_dir }}.7z" \
-            "${{ steps.build.outputs.arm64_package_dir }}.7z" \
-            --repo "${{ github.repository }}" \
-            --title "${{ steps.build.outputs.release_tag }}" \
-            --notes "Portable Helium packaged with Chrome++. Available for x64 and arm64.
+          set -euo pipefail
+          tag="${{ steps.build.outputs.release_tag }}"
+          assets=("${{ steps.build.outputs.x64_package_dir }}.7z" "${{ steps.build.outputs.arm64_package_dir }}.7z")
+          repo="${{ github.repository }}"
+
+          # 幂等：release 已存在（重跑/补包）就覆盖上传，不存在才创建。
+          # 否则同 tag 重跑会在 gh release create 处直接失败。
+          if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+            echo "Release $tag 已存在，覆盖上传附件"
+            gh release upload "$tag" "${assets[@]}" --clobber --repo "$repo"
+          else
+            gh release create "$tag" "${assets[@]}" \
+              --repo "$repo" \
+              --title "$tag" \
+              --notes "Portable Helium packaged with Chrome++. Available for x64 and arm64.
           Release follows Helium Windows updates.
 
           Sources: [Helium Windows](https://github.com/imputnet/helium-windows) | Chrome++ (upstream Bush2021/chrome_plus is currently unavailable; the Chrome++ binaries are vendored in this repo)"
+          fi
 
       - name: Publish draft (manual trigger)
         if: ${{ github.event_name == 'workflow_dispatch' }}
@@ -247,12 +249,20 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          gh release create "${{ steps.build.outputs.release_tag }}" \
-            "${{ steps.build.outputs.x64_package_dir }}.7z" \
-            "${{ steps.build.outputs.arm64_package_dir }}.7z" \
-            --repo "${{ github.repository }}" \
-            --title "${{ steps.build.outputs.release_tag }}" \
-            --draft \
-            --notes "Manually triggered draft release. Available for x64 and arm64.
+          set -euo pipefail
+          tag="${{ steps.build.outputs.release_tag }}"
+          assets=("${{ steps.build.outputs.x64_package_dir }}.7z" "${{ steps.build.outputs.arm64_package_dir }}.7z")
+          repo="${{ github.repository }}"
+
+          if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+            echo "Release $tag 已存在（手动触发），覆盖上传附件"
+            gh release upload "$tag" "${assets[@]}" --clobber --repo "$repo"
+          else
+            gh release create "$tag" "${assets[@]}" \
+              --repo "$repo" \
+              --title "$tag" \
+              --draft \
+              --notes "Manually triggered draft release. Available for x64 and arm64.
 
           Sources: [Helium Windows](https://github.com/imputnet/helium-windows) | Chrome++ (upstream Bush2021/chrome_plus is currently unavailable; the Chrome++ binaries are vendored in this repo)"
+          fi
