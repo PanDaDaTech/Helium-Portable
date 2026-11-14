@@ -273,8 +273,8 @@ jobs:
           release_tag="${helium_ver}+${plus_ver}"
 
           echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
-          echo "x64_package_dir=helium_${release_tag}_x64-windows" >> "$GITHUB_OUTPUT"
-          echo "arm64_package_dir=helium_${release_tag}_arm64-windows" >> "$GITHUB_OUTPUT"
+          echo "x64_package_dir=Helium_${release_tag}_x64-windows" >> "$GITHUB_OUTPUT"
+          echo "arm64_package_dir=Helium_${release_tag}_arm64-windows" >> "$GITHUB_OUTPUT"
 
           # Extract exe installers with 7z (NSIS outer layer)
           7z x "$helium_x64_exe" -ohelium_x64_extract
@@ -301,7 +301,7 @@ jobs:
 
           for arch in x64 arm64; do
             echo "=== Building $arch package ==="
-            package_dir="helium_${release_tag}_${arch}-windows"
+            package_dir="Helium_${release_tag}_${arch}-windows"
 
             # Locate helium source dir for current arch
             helium_root="$(dirname "$(find "helium_${arch}_files" -name 'chrome.exe' -print -quit 2>/dev/null)")"
