@@ -28,6 +28,21 @@ config/
 Chrome++ 包在便携包里的落点只有三处：`App/chrome++.ini`、`App/version.dll`
 （根目录的 `Cache/`、`Data/` 是空目录）。空目录 git 存不了，改由构建脚本 `mkdir -p` 生成。
 
+便携包结构（压缩包内的顶层目录固定叫 `Helium`，不带版本号；版本只体现在附件文件名里）：
+
+```
+Helium/
+├── App/            # chrome.exe + Chrome++ + initial_preferences
+├── Cache/          # 空
+└── Data/
+    └── Default/
+        └── Preferences   # 与 App/initial_preferences 同内容，解压即已配置
+```
+
+`config/initial_preferences` 会**同时**投两份：`App/initial_preferences`（首启种子）和
+`Data/Default/Preferences`（直接就是配置好的状态）。前者保证用户删掉 `Data/` 后重新首启
+仍能播种；后者保证解压后不必等首启写入就已经是「默认 Bing + 关更新」。
+
 - 为什么不用上游自带的 ini：我们要带自己的 `command_line`（`--disable-component-update`、
   关掉 `OutdatedBuildDetector` 等）。**注意里面没有 `--no-first-run`，也不要加**，理由见下。
 - 配置漂移：仓库里这份是 1.20.0 的**快照**。上游若新增配置项，我们缺失的键会被

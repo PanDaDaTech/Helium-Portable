@@ -320,11 +320,17 @@ jobs:
             # Chrome++ 载荷：version.dll 取自上游，chrome++.ini 用仓库里的版本覆盖上游的
             cp -a "chrome_plus_extract/${arch}/App/version.dll" "$package_dir/App/"
             cp -a "vendor/chrome_plus/chrome++.ini" "$package_dir/App/"
-            # 首启种子配置：默认搜索引擎 / 搜索引擎列表 / 关闭自动更新
+            # 首启种子配置：默认搜索引擎 / 关闭自动更新 / 跳过引导页
             cp -a "config/initial_preferences" "$package_dir/App/"
 
             # 便携化运行期需要的空目录（不依赖 git 能存空目录）
             mkdir -p "$package_dir/Cache" "$package_dir/Data"
+
+            # 同一份配置再放一份到 Data/Default/Preferences：解压后即使跳过首启播种
+            # 也已经是「默认 Bing + 关更新」的状态。App/ 那份保留，用户删掉 Data/
+            # 重新首启时仍能播种。
+            mkdir -p "$package_dir/Data/Default"
+            cp -a "config/initial_preferences" "$package_dir/Data/Default/Preferences"
 
             # Keep only zh-CN and en-US locales (search recursively for locales dirs)
             find "$package_dir/App" -type d -iname 'locales' | while read -r locales_dir; do
@@ -340,6 +346,7 @@ jobs:
             test -f "$package_dir/App/chrome++.ini"
             test -f "$package_dir/App/version.dll"
             test -f "$package_dir/App/initial_preferences"
+            test -f "$package_dir/Data/Default/Preferences"
             test -d "$package_dir/Cache"
             test -d "$package_dir/Data"
             echo "Package built: $package_dir"
@@ -353,8 +360,22 @@ jobs:
       - name: Create release archives
         shell: bash
         run: |
-          7z a "${{ steps.build.outputs.x64_package_dir }}.7z" "${{ steps.build.outputs.x64_package_dir }}"
-          7z a "${{ steps.build.outputs.arm64_package_dir }}.7z" "${{ steps.build.outputs.arm64_package_dir }}"
+          set -euo pipefail
+
+          # 压缩包里的顶层目录固定叫 Helium（不带版本号）；产物文件名仍带版本，
+          # 因为 release 附件需要区分版本与架构。
+          pack() {
+            local dir="$1"
+            rm -rf stage && mkdir stage
+            mv "$dir" "stage/Helium"
+            ( cd stage && 7z a "../${dir}.7z" Helium )
+            mv "stage/Helium" "$dir"
+            rm -rf stage
+            echo "archived ${dir}.7z -> Helium/"
+          }
+
+          pack "${{ steps.build.outputs.x64_package_dir }}"
+          pack "${{ steps.build.outputs.arm64_package_dir }}"
 
       - name: Publish release
         if: ${{ github.event_name != 'workflow_dispatch' }}
