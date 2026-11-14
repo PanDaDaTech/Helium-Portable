@@ -8,7 +8,7 @@
 
 **致谢原项目 [silverwolf-x/helium-plus](https://github.com/silverwolf-x/helium-plus) 的仓库参考！**
  - Fork 原项目并在此基础上改用上游的 NSIS 安装包版本提取制作便捷版。
- - 由于 @Bush2021 的账号出现问题，无法正常获取仓库状态，现已提取 Chrome++ 相关文件，方便后续进行 CI。
+ - Chrome++ 载荷（`version.dll`）跟随上游 [Bush2021/chrome_plus](https://github.com/Bush2021/chrome_plus) 的版本；配置文件 `chrome++.ini` 由本仓库自带（带了自定义启动参数）。
 
 Helium 是一个注重隐私的 Chromium 分支，完全兼容 Chrome 扩展。官方 Windows 版本并非便携设计——用户数据存储在 `C:\Users\[用户名]\AppData\Local` 下。
 本项目集成 Chrome++（DLL 注入实现便携化及标签页增强），将 Helium 打包为真正的便携浏览器，所有数据保留在程序目录内。
@@ -19,6 +19,7 @@ Helium 是一个注重隐私的 Chromium 分支，完全兼容 Chrome 扩展。�
 - 快捷键重映射与老板键支持
 - 无需安装，解压即用
 - 仅保留 `zh-CN` 和 `en-US` 语言包以缩减体积
+- 首次启动预置：默认搜索引擎为 **Bing**、关闭 Helium 自带的自动更新、跳过首次引导页
 - 同时提供 x64 和 arm64 两个架构版本
 - Release 使用 7z 格式打包
 - 通过 GitHub Actions 每日自动构建

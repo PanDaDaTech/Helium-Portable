@@ -22,14 +22,14 @@ check job → 比较版本 → build job → 构建 + 发布
 vendor/chrome_plus/
 └── chrome++.ini        # UTF-16LE，与上游 1.20.0 只差一行 command_line
 config/
-└── initial_preferences # 首启种子：搜索引擎列表 / 默认 Bing / 关闭自动更新
+└── initial_preferences # 首启种子：默认 Bing / 关闭自动更新 / 跳过引导页
 ```
 
 Chrome++ 包在便携包里的落点只有三处：`App/chrome++.ini`、`App/version.dll`
 （根目录的 `Cache/`、`Data/` 是空目录）。空目录 git 存不了，改由构建脚本 `mkdir -p` 生成。
 
-- 为什么不用上游自带的 ini：我们要带自己的 `command_line`（`--no-first-run`、
-  `--disable-component-update`、关掉 `OutdatedBuildDetector` 等）。
+- 为什么不用上游自带的 ini：我们要带自己的 `command_line`（`--disable-component-update`、
+  关掉 `OutdatedBuildDetector` 等）。**注意里面没有 `--no-first-run`，也不要加**，理由见下。
 - 配置漂移：仓库里这份是 1.20.0 的**快照**。上游若新增配置项，我们缺失的键会被
   Chrome++ 用默认值补上（不会报错）。构建时因此加了一步比对：把两份 ini 的
   `section|key` 集合求差，上游多出来的键打 `::warning::`，只告警不阻断。
@@ -46,7 +46,7 @@ Chrome++ 包在便携包里的落点只有三处：`App/chrome++.ini`、`App/ver
 
 ### 首启配置走 initial_preferences，不改 Data 里的 Preferences
 
-想把「默认 Bing + 只留五个搜索引擎 + 关自动更新」预置给用户，**不能**直接往包里塞一个
+想把「默认 Bing + 关自动更新 + 不弹引导页」预置给用户，**不能**直接往包里塞一个
 配好的 `Data/Default/Preferences`：Chromium 对受保护偏好（搜索引擎、主页、启动页、扩展）
 存了 HMAC-SHA256，且**绑定本机设备标识**，跨机拷贝后会被判定篡改并重置——现象就是
 「搜索引擎不生效、设置还原」。这正是 `xrgzs/CBPrefs` 要解决的事（它靠脚本在本机重算 MAC）。
@@ -63,20 +63,40 @@ Chrome++ 包在便携包里的落点只有三处：`App/chrome++.ini`、`App/ver
   带上这个开关等于宣告「不是首次运行」，种子文件会被**完全忽略且没有任何报错**。
   这是本次最容易踩的坑：`--no-first-run` 原本就在配置里，看起来毫无关联。
   （`Data/` 空 → 无哨兵 → 首次运行 → 播种，之后哨兵生效，不会重复。）
-- 用到的三个键（都来自源码核对，不是猜的）：
-  - `search_provider_overrides`：**列表非空时会整表替换**内置预置引擎表
-    （`GetPrepopulatedEngines` 先读它）。元素必填 `name/keyword/search_url/favicon_url/encoding/id`，
-    可选 `suggest_url` 等。Helium 默认给的是 DDG/Ecosia/Bing/Qwant/Kagi/Startpage/Brave，
-    且把区域映射清空了——所以国内用户一个中文引擎都没有，这正是本次要修的点。
+- 用到的键（都来自源码核对 + 实机播种，不是猜的）：
   - `default_search_provider_data.template_url_data`：显式指定默认引擎。它按
     `prepopulate_id` 回查已有引擎（`FindPrepopulatedTemplateURL`），所以写 `prepopulate_id=3`
-    会和列表里的 Bing 合成同一个，不会多出一个重复项。
+    会和内置的 Bing 合成同一个，不会多出一个重复项。实机播种后的 `Preferences` 里
+    `default_search_provider.reset_occurred = false`、`mirrored_template_url_data.short_name`
+    变成内置值 `Microsoft Bing`、`search_engines.engines` 仍为空 —— 三项都说明「合成了、没加新的、没被重置」。
   - `helium.services.browser_updates`：Helium 自己的 WinSparkle 更新器总开关
     （`ShouldAccessUpdateService` 与它做 AND）。置 `false` 后连初始化都不做。
     Helium 不是 Google Update，光靠 `--disable-component-update` 关不掉它。
-- 联想接口只在 `suggest_url` 返回 OpenSearch 数组（`["q",["s1",...]]`）时才有用：
-  Bing / Google 是这种格式；百度 `sugrec`、搜狗 `ajajjson`、360 `suggest` 都是自家 JSON
-  结构，Chromium 的通用解析器读不懂，所以这三个**故意不配 `suggest_url`**，省掉无用请求。
+  - `helium.completed_onboarding`：`helium://setup` 引导页的总开关。**这才是「首次启动页」的真凶**，
+    它跟 `--no-first-run` 无关：`--no-first-run` 只作用于 Chromium 的首次运行判定，管不到 Helium 自己的引导页。
+    置 `true` 即视为已完成引导。
+
+### 为什么不能用 `search_provider_overrides` 增删引擎
+
+原本的方案是「用 `search_provider_overrides` 整表替换内置引擎表」：
+列表非空时 `GetPrepopulatedEngines` 会先读它，元素必填 `name/keyword/search_url/favicon_url/encoding/id`。
+理论上可以做到「只留 Bing/百度/搜狗/360/Google」，但**实测会弹「重置了这些设置」**。
+
+原因是这个键在 `kTrackedPrefs` 里，且标记为 `ENFORCE_ON_LOAD`：值必须是**本机**算出的 HMAC。
+首启种子写入的值 MAC 对不上，浏览器就判定为篡改 → 丢弃该值 → 用户看到重置提示。
+换句话说，它和 `Data/Default/Preferences` 里那堆受保护偏好是同一类东西，只能靠脚本在本机重算 MAC
+（`xrgzs/CBPrefs` 干的就是这个），不适合放在便携包的种子里。
+
+结论：**种子只能设默认引擎，不能删内置引擎、也不能加自定义引擎。**
+`config/initial_preferences` 因此只剩 `default_search_provider_data` + `helium` 两块，
+CI 里加了硬校验：出现 `search_provider_overrides` 直接 `exit 1`，防止以后有人「优化」回去。
+
+顺带记一笔：Helium 的 `engine-defaults.patch` 清空了区域映射，默认给的是
+DDG/Ecosia/Bing/Qwant/Kagi/Startpage/Brave，国内用户看不到中文引擎。
+想让用户拿到百度/搜狗/360，只能引导他们在「设置 → 搜索引擎 → 管理搜索引擎」里自己添加。
+联想接口也只有 `suggest_url` 返回 OpenSearch 数组（`["q",["s1",...]]`）时才有用，
+Bing/Google 是这种格式，百度 `sugrec`、搜狗 `ajajjson`、360 `suggest` 都是自家 JSON，
+Chromium 的通用解析器读不懂 —— 所以即使加引擎也不配 `suggest_url`，省掉无用请求。
 
 ### 只跟踪 Helium 与 Chrome++ 的版本变化
 
@@ -144,6 +164,15 @@ vendor/chrome_plus/** -text
 ### dev 分支 workflow 不生效
 
 在 dev 分支修改 workflow 文件不会被 GitHub Actions 识别（schedule 和 workflow_dispatch 只看默认分支）。测试时需要直接在 main 分支操作。
+
+### 两个「看起来是一件事、其实是两件事」的现象
+
+1. **弹出「重置了这些设置」** → 种子里放了受跟踪偏好（`search_provider_overrides`），
+   MAC 对不上被判定篡改。只保留 `default_search_provider_data` 后 `reset_occurred = false`，弹窗消失。
+2. **首次启动还是打开引导页** → 不是 Chromium 的首次运行，而是 Helium 自己的 `helium://setup`，
+   由 `helium.completed_onboarding` 控制，`--no-first-run` 完全管不到。把它置 `true` 才有效。
+
+两个问题的共同教训：**先分清是 Chromium 的行为还是 Helium 的行为**，否则会一直调错开关。
 
 ## Bash 备忘
 

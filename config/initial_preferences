@@ -1,48 +1,4 @@
 {
-  "search_provider_overrides": [
-    {
-      "id": 3,
-      "name": "Bing",
-      "keyword": "bing.com",
-      "search_url": "https://www.bing.com/search?q={searchTerms}",
-      "suggest_url": "https://www.bing.com/osjson.aspx?query={searchTerms}",
-      "favicon_url": "https://www.bing.com/favicon.ico",
-      "encoding": "UTF-8"
-    },
-    {
-      "id": 21,
-      "name": "百度",
-      "keyword": "baidu.com",
-      "search_url": "https://www.baidu.com/s?wd={searchTerms}",
-      "favicon_url": "https://www.baidu.com/favicon.ico",
-      "encoding": "UTF-8"
-    },
-    {
-      "id": 22,
-      "name": "搜狗",
-      "keyword": "sogou.com",
-      "search_url": "https://www.sogou.com/web?query={searchTerms}",
-      "favicon_url": "https://www.sogou.com/favicon.ico",
-      "encoding": "UTF-8"
-    },
-    {
-      "id": 23,
-      "name": "360搜索",
-      "keyword": "so.com",
-      "search_url": "https://www.so.com/s?q={searchTerms}",
-      "favicon_url": "https://www.so.com/favicon.ico",
-      "encoding": "UTF-8"
-    },
-    {
-      "id": 24,
-      "name": "Google",
-      "keyword": "google.com",
-      "search_url": "https://www.google.com/search?q={searchTerms}",
-      "suggest_url": "https://www.google.com/complete/search?client=chrome&q={searchTerms}",
-      "favicon_url": "https://www.google.com/favicon.ico",
-      "encoding": "UTF-8"
-    }
-  ],
   "default_search_provider_data": {
     "template_url_data": {
       "id": "3",
@@ -57,6 +13,7 @@
     }
   },
   "helium": {
+    "completed_onboarding": true,
     "services": {
       "browser_updates": false
     }
