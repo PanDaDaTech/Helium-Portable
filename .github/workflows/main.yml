@@ -24,15 +24,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          # Chrome++ 版本取自仓库内 vendored 的文件。
-          # 上游 Bush2021/chrome_plus 账号已被冻结，仓库不可访问，不能再从上游查询版本。
-          if [[ ! -f vendor/chrome_plus/VERSION ]]; then
-            echo "::error::vendor/chrome_plus/VERSION not found"
-            exit 1
-          fi
-          plus_ver="$(tr -d '[:space:]' < vendor/chrome_plus/VERSION)"
-          if [[ -z "$plus_ver" ]]; then
-            echo "::error::vendor/chrome_plus/VERSION is empty"
+          # 仓库自带的 Chrome++ 配置必须存在（构建时要覆盖上游的同名文件）
+          if [[ ! -f vendor/chrome_plus/chrome++.ini ]]; then
+            echo "::error::vendor/chrome_plus/chrome++.ini not found"
             exit 1
           fi
 
@@ -48,7 +42,17 @@ jobs:
           fi
           latest_helium="${latest_helium#v}"
 
-          echo "chrome_plus_ver=$plus_ver" >> "$GITHUB_OUTPUT"
+          # 上游 Chrome++ 最新 release。Bush2021 的账号曾在 2026-09 被冻结，
+          # 当时改成了仓库自带；现已恢复，改回跟随上游。
+          # 同样必须显式判空：空值会被当成「版本相同」而永远不出包。
+          latest_plus="$(gh release view --repo Bush2021/chrome_plus --json tagName -q '.tagName' 2>/dev/null || echo "")"
+          if [[ -z "$latest_plus" ]]; then
+            echo "::error::无法读取 Bush2021/chrome_plus 的最新 release（上游可能再次不可用）"
+            exit 1
+          fi
+          latest_plus="${latest_plus#v}"
+
+          echo "chrome_plus_ver=$latest_plus" >> "$GITHUB_OUTPUT"
           echo "helium_tag=$latest_helium" >> "$GITHUB_OUTPUT"
 
           # 从现有 release tag 解析出 {helium}+{chrome_plus}
@@ -67,15 +71,15 @@ jobs:
           elif [[ "$cur_helium" != "$latest_helium" ]]; then
             should_run="true"
             reason="helium changed: current=$cur_helium latest=$latest_helium"
-          elif [[ "$cur_plus" != "$plus_ver" ]]; then
+          elif [[ "$cur_plus" != "$latest_plus" ]]; then
             should_run="true"
-            reason="chrome_plus changed: current=$cur_plus vendored=$plus_ver"
+            reason="chrome_plus changed: current=$cur_plus latest=$latest_plus"
           fi
 
           echo "current_release=${cur_ver:-<none>}"
           echo "current_helium=${cur_helium:-<none>}"
           echo "latest_helium=$latest_helium"
-          echo "chrome_plus_ver=$plus_ver"
+          echo "latest_chrome_plus=$latest_plus"
           echo "should_run=${should_run:-false} ($reason)"
 
           echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
@@ -85,7 +89,7 @@ jobs:
     needs: check
     if: ${{ needs.check.outputs.should_run || github.event_name == 'workflow_dispatch' }}
     steps:
-      # Chrome++ 文件现在由仓库自带（vendor/），构建 job 必须 checkout 才能拿到
+      # 需要 checkout 才能拿到 vendor/chrome_plus/chrome++.ini 与 config/initial_preferences
       - uses: actions/checkout@v7
 
       - name: Download Helium x64
@@ -104,8 +108,108 @@ jobs:
           fileName: 'helium_*_arm64-installer.exe'
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Download Chrome++
+        uses: robinraju/release-downloader@v1
+        with:
+          repository: Bush2021/chrome_plus
+          tag: ${{ needs.check.outputs.chrome_plus_ver }}
+          fileName: 'Chrome++_*_x86_x64_arm64.7z'
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Install 7z
         run: sudo apt-get update && sudo apt-get install -y p7zip-full
+
+      - name: Verify Chrome++ payload
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cpp_archive="$(find . -maxdepth 1 -name 'Chrome++_*.7z' -printf '%f\n' | head -1)"
+          if [[ -z "$cpp_archive" ]]; then
+            echo "::error::Chrome++ archive not found in workspace"
+            ls -la
+            exit 1
+          fi
+          echo "Chrome++ archive: $cpp_archive"
+
+          rm -rf chrome_plus_extract
+          7z x "$cpp_archive" -ochrome_plus_extract -y
+
+          # 上游布局：{x64,arm64,x86}/App/{chrome++.ini,version.dll}
+          for arch in x64 arm64; do
+            if [[ ! -f "chrome_plus_extract/$arch/App/version.dll" ]]; then
+              echo "::error::missing chrome_plus_extract/$arch/App/version.dll（上游包结构可能变了）"
+              find chrome_plus_extract -maxdepth 3 | sort
+              exit 1
+            fi
+          done
+
+          # 校验 DLL 是合法 PE 且架构正确，避免上游换包/换名后静默塞错文件
+          python3 - <<'PY'
+          import struct, sys
+
+          expected = {"x64": 0x8664, "arm64": 0xAA64}
+          ok = True
+          for arch, want in expected.items():
+              path = f"chrome_plus_extract/{arch}/App/version.dll"
+              data = open(path, "rb").read()
+              pe = struct.unpack_from("<I", data, 0x3C)[0]
+              valid_pe = data[:2] == b"MZ" and data[pe:pe + 4] == b"PE\0\0"
+              machine = struct.unpack_from("<H", data, pe + 4)[0]
+              name = {0x8664: "x64", 0xAA64: "arm64", 0x14C: "x86"}.get(machine, hex(machine))
+              print(f"{arch}: {len(data)} bytes, machine={name}, PE={valid_pe}")
+              if not valid_pe or machine != want:
+                  print(f"::error::Chrome++ {arch} payload is not a valid {arch} PE")
+                  ok = False
+          sys.exit(0 if ok else 1)
+          PY
+
+          # 配置漂移检查：仓库里的 chrome++.ini 是 1.20.0 的快照（仅多一行 command_line）。
+          # 上游若新增了配置项，我们这份会缺失，Chrome++ 会静默回退默认值——只告警，不阻断构建。
+          python3 - <<'PY'
+          import re
+
+          def keys_of(path):
+              text = open(path, "rb").read().decode("utf-16")
+              section, out = "", set()
+              for line in text.splitlines():
+                  line = line.strip()
+                  if not line or line.startswith(";"):
+                      continue
+                  m = re.fullmatch(r"\[(.+)\]", line)
+                  if m:
+                      section = m.group(1)
+                      continue
+                  if "=" in line:
+                      out.add(f"{section}|{line.split('=', 1)[0].strip()}")
+              return out
+
+          ours = keys_of("vendor/chrome_plus/chrome++.ini")
+          theirs = keys_of("chrome_plus_extract/x64/App/chrome++.ini")
+          missing = sorted(theirs - ours)
+          extra = sorted(ours - theirs)
+          print(f"配置项: 本地 {len(ours)} / 上游 {len(theirs)}")
+          if extra:
+              print("本地独有（预期存在，如 command_line 的自定义参数）: " + ", ".join(extra))
+          for key in missing:
+              print(f"::warning::上游 chrome++.ini 新增了配置项 {key}，本地快照缺失，将回退默认值")
+          if not missing:
+              print("无配置漂移")
+          PY
+
+          # 种子配置只在「首次运行」被读取，而 --no-first-run 会让浏览器判定为「非首次运行」，
+          # 导致 initial_preferences 被完全忽略且没有任何报错。这是静默失效，必须硬拦。
+          python3 - <<'PY'
+          import sys
+
+          text = open("vendor/chrome_plus/chrome++.ini", "rb").read().decode("utf-16")
+          bad = [l for l in text.splitlines() if l.startswith("command_line=") and "--no-first-run" in l]
+          if bad:
+              print("::error::chrome++.ini 的 command_line 含有 --no-first-run，"
+                    "会导致 App/initial_preferences 被完全忽略（默认搜索引擎/更新开关全部失效）")
+              sys.exit(1)
+          print("command_line 检查通过：未包含 --no-first-run")
+          PY
 
       - name: Build portable packages
         id: build
@@ -156,16 +260,6 @@ jobs:
           for arch in x64 arm64; do
             echo "=== Building $arch package ==="
             package_dir="helium_${release_tag}_${arch}-windows"
-            chrome_plus_arch="vendor/chrome_plus/${arch}"
-
-            # 校验仓库自带的 Chrome++ 载荷
-            for f in App/chrome++.ini App/version.dll; do
-              if [[ ! -f "$chrome_plus_arch/$f" ]]; then
-                echo "::error::missing vendored Chrome++ file: $chrome_plus_arch/$f"
-                find vendor/chrome_plus -maxdepth 3 | sort
-                exit 1
-              fi
-            done
 
             # Locate helium source dir for current arch
             helium_root="$(dirname "$(find "helium_${arch}_files" -name 'chrome.exe' -print -quit 2>/dev/null)")"
@@ -178,12 +272,14 @@ jobs:
 
             # Assemble package: Chrome++ 目录内容落在根目录，Helium 落在 App/
             mkdir -p "$package_dir"
-            cp -a "$chrome_plus_arch/." "$package_dir/"
             mkdir -p "$package_dir/App"
             cp -a "$helium_root/." "$package_dir/App/"
-            # 若 Chromium 自带同名文件会覆盖掉 Chrome++ 的，这里补回来
-            cp -a "$chrome_plus_arch/App/chrome++.ini" "$package_dir/App/"
-            cp -a "$chrome_plus_arch/App/version.dll" "$package_dir/App/"
+
+            # Chrome++ 载荷：version.dll 取自上游，chrome++.ini 用仓库里的版本覆盖上游的
+            cp -a "chrome_plus_extract/${arch}/App/version.dll" "$package_dir/App/"
+            cp -a "vendor/chrome_plus/chrome++.ini" "$package_dir/App/"
+            # 首启种子配置：默认搜索引擎 / 搜索引擎列表 / 关闭自动更新
+            cp -a "config/initial_preferences" "$package_dir/App/"
 
             # 便携化运行期需要的空目录（不依赖 git 能存空目录）
             mkdir -p "$package_dir/Cache" "$package_dir/Data"
@@ -201,6 +297,7 @@ jobs:
             test -f "$package_dir/App/chrome.exe"
             test -f "$package_dir/App/chrome++.ini"
             test -f "$package_dir/App/version.dll"
+            test -f "$package_dir/App/initial_preferences"
             test -d "$package_dir/Cache"
             test -d "$package_dir/Data"
             echo "Package built: $package_dir"
@@ -225,6 +322,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ steps.build.outputs.release_tag }}"
+          plus_ver="${tag#*+}"
           repo="${{ github.repository }}"
           assets=("${{ steps.build.outputs.x64_package_dir }}.7z" "${{ steps.build.outputs.arm64_package_dir }}.7z")
 
@@ -262,9 +360,9 @@ jobs:
                 --title "$tag" \
                 --latest \
                 --notes "Portable Helium packaged with Chrome++. Available for x64 and arm64.
-          Release follows Helium Windows updates.
+          Release follows Helium Windows and Chrome++ updates.
 
-          Sources: [Helium Windows](https://github.com/imputnet/helium-windows) | Chrome++ (upstream Bush2021/chrome_plus is currently unavailable; the Chrome++ binaries are vendored in this repo)"
+          Sources: [Helium Windows](https://github.com/imputnet/helium-windows) | [Chrome++ $plus_ver](https://github.com/Bush2021/chrome_plus/releases/tag/$plus_ver)"
               ;;
           esac
 
@@ -305,5 +403,5 @@ jobs:
               --draft \
               --notes "Manually triggered draft release. Available for x64 and arm64.
 
-          Sources: [Helium Windows](https://github.com/imputnet/helium-windows) | Chrome++ (upstream Bush2021/chrome_plus is currently unavailable; the Chrome++ binaries are vendored in this repo)"
+          Sources: [Helium Windows](https://github.com/imputnet/helium-windows) | [Chrome++](https://github.com/Bush2021/chrome_plus)"
           fi

@@ -8,38 +8,79 @@
 check job → 比较版本 → build job → 构建 + 发布
 ```
 
-- **check job**：读本仓库当前 release tag + 上游 Helium 最新 tag + 仓库内 `vendor/chrome_plus/VERSION`，三个值决定要不要出包
-- **build job**：checkout（取 `vendor/`）→ 下载 Helium 安装包 → 解压 → 组装便携包 → 上传 artifact + 创建 release
+- **check job**：读本仓库当前 release tag + 上游 Helium 最新 tag + 上游 Chrome++ 最新 tag，三个值决定要不要出包
+- **build job**：checkout（取配置）→ 下载 Helium 安装包与 Chrome++ 包 → 解压 → 组装便携包 → 创建 release
 
 ## 关键设计决策
 
-### Chrome++ 改为仓库自带（vendored）
+### Chrome++：二进制跟上游，配置用仓库里的
 
-上游 `Bush2021/chrome_plus` 账号被平台冻结，**整个 owner 变 404**（不只是单个仓库）。
-CI 里 `gh release view --repo Bush2021/chrome_plus` 必然失败，在 `shell: bash`（`-e -o pipefail`）
-下未加保护的那行会直接让 check job 退出，表现为「release not found / exit code 1」。
-
-处理方式：把 Chrome++ 的载荷提取出来提交进仓库，构建时只读本地文件，不再访问上游。
+`version.dll` 每次构建从上游 `Bush2021/chrome_plus` 下载；`chrome++.ini` 固定用
+`vendor/chrome_plus/chrome++.ini`，覆盖上游包里的同名文件。
 
 ```
 vendor/chrome_plus/
-├── VERSION                              # Chrome++ 版本号，唯一来源
-├── x64/App/{chrome++.ini,version.dll}
-└── arm64/App/{chrome++.ini,version.dll}
+└── chrome++.ini        # UTF-16LE，与上游 1.20.0 只差一行 command_line
+config/
+└── initial_preferences # 首启种子：搜索引擎列表 / 默认 Bing / 关闭自动更新
 ```
 
-- Chrome++ 包在便携包里的落点只有三处：`App/chrome++.ini`、`App/version.dll`
-  （根目录的 `Cache/`、`Data/` 是空目录）。空目录 git 存不了，改由构建脚本 `mkdir -p` 生成。
-- 版本号从「查上游」变成「读 `vendor/chrome_plus/VERSION`」。**升级 Chrome++ 必须手动改这个文件并提交**，
-  push 后 CI 会在 check 阶段判定 `chrome_plus changed` 并重新出包（tag 里带 Chrome++ 版本，所以必须重建）。
+Chrome++ 包在便携包里的落点只有三处：`App/chrome++.ini`、`App/version.dll`
+（根目录的 `Cache/`、`Data/` 是空目录）。空目录 git 存不了，改由构建脚本 `mkdir -p` 生成。
+
+- 为什么不用上游自带的 ini：我们要带自己的 `command_line`（`--no-first-run`、
+  `--disable-component-update`、关掉 `OutdatedBuildDetector` 等）。
+- 配置漂移：仓库里这份是 1.20.0 的**快照**。上游若新增配置项，我们缺失的键会被
+  Chrome++ 用默认值补上（不会报错）。构建时因此加了一步比对：把两份 ini 的
+  `section|key` 集合求差，上游多出来的键打 `::warning::`，只告警不阻断。
 - `vendor/chrome_plus/**` 在 `.gitattributes` 里声明 `-text`，原因见下方踩坑记录。
 
-### 只跟踪 Helium Windows 更新
+### 历史：2026-09 上游账号被冻结
 
-构建由 Helium Windows 发布新版本触发；Chrome++ 不再自动跟随上游（上游已不可访问），
-改为仓库内固定版本，需要人工升级。
+`Bush2021` 账号曾被平台冻结，**整个 owner 变 404**（不只是单个仓库）。当时把 Chrome++ 的
+`version.dll` 也一并 vendored 进仓库应急，2026-11 上游恢复（1.20.0）后改回跟随上游。
 
-理由：Helium 是浏览器主体，Chrome++ 是增强插件且已停止更新。用户关心的是浏览器版本更新。
+留下的一条经验：上游取值在 `shell: bash`（`-e -o pipefail`）下失败会直接终止 job，
+表现为「release not found / exit code 1」；但单纯加 `|| echo ""` 会让空值被判成
+「版本相同」而静默跳过构建——必须「静默捕获 + 显式判空报错」。
+
+### 首启配置走 initial_preferences，不改 Data 里的 Preferences
+
+想把「默认 Bing + 只留五个搜索引擎 + 关自动更新」预置给用户，**不能**直接往包里塞一个
+配好的 `Data/Default/Preferences`：Chromium 对受保护偏好（搜索引擎、主页、启动页、扩展）
+存了 HMAC-SHA256，且**绑定本机设备标识**，跨机拷贝后会被判定篡改并重置——现象就是
+「搜索引擎不生效、设置还原」。这正是 `xrgzs/CBPrefs` 要解决的事（它靠脚本在本机重算 MAC）。
+
+我们改用官方通道：**`App/initial_preferences`**（老名字 `master_preferences`）。
+浏览器首次运行时读取它、**自己**把值写进 `Preferences` 并标记为「已播种」
+（`MarkPrefsSeededFromInitialPrefs`），所以 MAC 天然正确，不需要任何脚本或管理员权限。
+
+- 只在**首次运行**生效：`Data/` 为空时才会触发；用户把 `Data/` 删掉会重新播种。
+- 文件必须放在 `chrome.exe` 同级目录（`App/`），无扩展名。
+- **`command_line` 里绝对不能有 `--no-first-run`**。源码三处互锁：
+  `ChromeFeatureListCreator` 里 `if (!first_run::IsChromeFirstRun()) return;` 才加载种子，
+  而 `IsChromeFirstRun()` = `force_first_run || (!has_sentinel && !no_first_run)`。
+  带上这个开关等于宣告「不是首次运行」，种子文件会被**完全忽略且没有任何报错**。
+  这是本次最容易踩的坑：`--no-first-run` 原本就在配置里，看起来毫无关联。
+  （`Data/` 空 → 无哨兵 → 首次运行 → 播种，之后哨兵生效，不会重复。）
+- 用到的三个键（都来自源码核对，不是猜的）：
+  - `search_provider_overrides`：**列表非空时会整表替换**内置预置引擎表
+    （`GetPrepopulatedEngines` 先读它）。元素必填 `name/keyword/search_url/favicon_url/encoding/id`，
+    可选 `suggest_url` 等。Helium 默认给的是 DDG/Ecosia/Bing/Qwant/Kagi/Startpage/Brave，
+    且把区域映射清空了——所以国内用户一个中文引擎都没有，这正是本次要修的点。
+  - `default_search_provider_data.template_url_data`：显式指定默认引擎。它按
+    `prepopulate_id` 回查已有引擎（`FindPrepopulatedTemplateURL`），所以写 `prepopulate_id=3`
+    会和列表里的 Bing 合成同一个，不会多出一个重复项。
+  - `helium.services.browser_updates`：Helium 自己的 WinSparkle 更新器总开关
+    （`ShouldAccessUpdateService` 与它做 AND）。置 `false` 后连初始化都不做。
+    Helium 不是 Google Update，光靠 `--disable-component-update` 关不掉它。
+- 联想接口只在 `suggest_url` 返回 OpenSearch 数组（`["q",["s1",...]]`）时才有用：
+  Bing / Google 是这种格式；百度 `sugrec`、搜狗 `ajajjson`、360 `suggest` 都是自家 JSON
+  结构，Chromium 的通用解析器读不懂，所以这三个**故意不配 `suggest_url`**，省掉无用请求。
+
+### 只跟踪 Helium 与 Chrome++ 的版本变化
+
+任一上游发新版本都会触发重建，因为 tag 里同时带两个版本号。
 
 ### 用 gh CLI 替代第三方 Actions
 
@@ -50,12 +91,11 @@ vendor/chrome_plus/
 - `+` 号在文件名中会被 `softprops/action-gh-release` 的 glob 引擎错误展开，导致目录内所有文件被上传为独立 asset
 - `gh` 预装在 GitHub runners，无额外依赖
 
-### Artifact vs Release 上传策略
+### 只发 Release，不传 artifact
 
-| 目标 | 方式 | 原因 |
-|------|------|------|
-| Artifact | 直接上传目录 | `upload-artifact` 支持目录 |
-| Release | 先 zip 再上传文件 | GitHub Releases API 只接受文件，不接受目录 |
+产物直接作为 Release 附件（先 `7z a` 再传文件，GitHub Releases API 只接受文件不接受目录）。
+不再额外上传 `upload-artifact`：产物已在附件里，再存一份纯属重复，而 artifact 会吃
+Actions 存储配额（本账户曾因此把上传全堵死）。构建失败要排查时看 Actions 日志。
 
 ### 版本号格式
 
