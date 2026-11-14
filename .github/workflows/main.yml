@@ -109,12 +109,37 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download Chrome++
+        id: download_cpp
         uses: robinraju/release-downloader@v1
+        continue-on-error: true
         with:
           repository: Bush2021/chrome_plus
           tag: ${{ needs.check.outputs.chrome_plus_ver }}
           fileName: 'Chrome++_*_x86_x64_arm64.7z'
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      # 上游资产偶尔会 404/限流。仓库里备份了完整包，版本对得上就直接用备份，
+      # 版本对不上（备份太旧）宁可失败也不拿旧 DLL 冒充新版本。
+      - name: Fall back to vendored Chrome++ payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver="${{ needs.check.outputs.chrome_plus_ver }}"
+
+          if compgen -G "Chrome++_*.7z" > /dev/null; then
+            echo "上游下载成功：$(ls Chrome++_*.7z)"
+            exit 0
+          fi
+
+          backup="$(ls vendor/chrome_plus/Chrome++_v${ver}_*.7z 2>/dev/null | head -1 || true)"
+          if [[ -z "$backup" ]]; then
+            echo "::error::上游 Chrome++ 资产下载失败，且仓库里没有 ${ver} 的备份包"
+            ls vendor/chrome_plus || true
+            exit 1
+          fi
+
+          cp "$backup" .
+          echo "::warning::上游 Chrome++ 资产下载失败，回退到仓库备份 $(basename "$backup")"
 
       - name: Install 7z
         run: sudo apt-get update && sudo apt-get install -y p7zip-full
@@ -210,6 +235,48 @@ jobs:
               sys.exit(1)
           print("command_line 检查通过：未包含 --no-first-run")
           PY
+
+      # 上游 Bush2021 的账号在 2026-09 曾被整号冻结（owner 直接 404），
+      # 所以仓库里常备一份当前版本的完整包；上游一升级就自动替换并提交回 main，
+      # 这样上游再挂也能靠备份继续出包。
+      - name: Refresh vendored Chrome++ backup
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver="${{ needs.check.outputs.chrome_plus_ver }}"
+
+          src="$(ls Chrome++_*.7z 2>/dev/null | head -1 || true)"
+          if [[ -z "$src" ]]; then
+            echo "::warning::没有可用的 Chrome++ 包，跳过备份刷新"
+            exit 0
+          fi
+
+          name="$(basename "$src")"
+          # 只备份与本次构建版本一致的包；回退用的旧包不重复提交
+          if [[ "$name" != *"_v${ver}_"* ]]; then
+            echo "本次使用的是备份包 $name（与 $ver 不一致），不做备份刷新"
+            exit 0
+          fi
+
+          if [[ -f "vendor/chrome_plus/$name" ]]; then
+            echo "仓库已备份 $name，无需更新"
+            exit 0
+          fi
+
+          rm -f vendor/chrome_plus/Chrome++_*.7z
+          cp "$src" "vendor/chrome_plus/$name"
+          ls -la vendor/chrome_plus
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A vendor/chrome_plus
+          git commit -m "chore: 备份 Chrome++ ${ver} 完整包"
+
+          if git pull --rebase --autostash origin main && git push origin HEAD:main; then
+            echo "已提交备份：$name"
+          else
+            echo "::warning::备份提交/推送失败，本次构建继续"
+          fi
 
       - name: Verify initial_preferences seed
         shell: bash

@@ -20,7 +20,8 @@ check job → 比较版本 → build job → 构建 + 发布
 
 ```
 vendor/chrome_plus/
-└── chrome++.ini        # UTF-16LE，与上游 1.20.0 只差一行 command_line
+├── chrome++.ini                     # UTF-16LE，与上游 1.20.0 只差一行 command_line
+└── Chrome++_v1.20.0_x86_x64_arm64.7z  # 上游完整包备份（约 190 KB），上游挂掉时回退用
 config/
 └── initial_preferences # 首启种子：默认 Bing / 关闭自动更新 / 跳过引导页
 ```
@@ -54,6 +55,17 @@ Helium/
 
 `Bush2021` 账号曾被平台冻结，**整个 owner 变 404**（不只是单个仓库）。当时把 Chrome++ 的
 `version.dll` 也一并 vendored 进仓库应急，2026-11 上游恢复（1.20.0）后改回跟随上游。
+
+现在改成「跟随上游 + 常备备份」：
+
+- `vendor/chrome_plus/Chrome++_v<ver>_x86_x64_arm64.7z` 常备当前版本的**完整包**（约 190 KB）；
+- `Refresh vendored Chrome++ backup`：上游出了更新的版本时，把新包替换进 vendor 并
+  `git commit + push` 回 `main`（用 `GITHUB_TOKEN` 推送不会触发新的 workflow，不会死循环）；
+- `Fall back to vendored Chrome++ payload`：上游资产 404/限流时回退到备份，但**要求版本号
+  完全一致**——宁可失败也不拿旧 DLL 冒充新版本，否则 tag 里的版本就成了假的。
+
+局限：如果 owner 再次整体 404，`check` job 连「最新版本」都读不到，会直接报错停下。
+备份的作用是让这种情况下的手工恢复变快，而不是全自动续命。
 
 留下的一条经验：上游取值在 `shell: bash`（`-e -o pipefail`）下失败会直接终止 job，
 表现为「release not found / exit code 1」；但单纯加 `|| echo ""` 会让空值被判成
